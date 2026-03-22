@@ -5,6 +5,8 @@ import sqlite3
 import os
 
 router = APIRouter(prefix="/api/lists", tags=["lists"])
+notes_router = APIRouter(prefix="/api/notes", tags=["notes"])
+searches_router = APIRouter(prefix="/api/searches", tags=["searches"])
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "lists.db")
 
@@ -35,6 +37,20 @@ def init_db():
             PRIMARY KEY (list_id, player_id),
             FOREIGN KEY (list_id) REFERENCES scouting_lists(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS player_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id INTEGER NOT NULL UNIQUE,
+            note_text TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS saved_searches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            filters_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()
@@ -54,6 +70,18 @@ class PlayerAdd(BaseModel):
     team_name: Optional[str] = None
     position: Optional[str] = None
 
+
+class NoteUpsert(BaseModel):
+    note_text: str
+
+
+class SearchSave(BaseModel):
+    name: str
+    description: Optional[str] = None
+    filters_json: Optional[str] = None
+
+
+# ── Scouting Lists ────────────────────────────────────────────────────────────
 
 @router.get("/")
 def get_lists():
@@ -106,13 +134,10 @@ def get_list_players(list_id: int):
 @router.post("/{list_id}/players")
 def add_player_to_list(list_id: int, body: PlayerAdd):
     conn = get_db()
-    # Check list exists
     lst = conn.execute("SELECT id FROM scouting_lists WHERE id = ?", (list_id,)).fetchone()
     if not lst:
         conn.close()
         raise HTTPException(status_code=404, detail="List not found")
-
-    # Upsert player
     conn.execute("""
         INSERT OR REPLACE INTO list_players (list_id, player_id, player_name, team_name, position)
         VALUES (?, ?, ?, ?, ?)
@@ -129,6 +154,71 @@ def remove_player_from_list(list_id: int, player_id: int):
         "DELETE FROM list_players WHERE list_id = ? AND player_id = ?",
         (list_id, player_id)
     )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ── Player Notes ──────────────────────────────────────────────────────────────
+
+@notes_router.get("/{player_id}")
+def get_note(player_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM player_notes WHERE player_id = ?", (player_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {"player_id": player_id, "note_text": "", "updated_at": None}
+    return dict(row)
+
+
+@notes_router.post("/{player_id}")
+def upsert_note(player_id: int, body: NoteUpsert):
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO player_notes (player_id, note_text, updated_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(player_id) DO UPDATE SET
+            note_text = excluded.note_text,
+            updated_at = datetime('now')
+    """, (player_id, body.note_text))
+    conn.commit()
+    row = conn.execute("SELECT * FROM player_notes WHERE player_id = ?", (player_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+# ── Saved Searches ────────────────────────────────────────────────────────────
+
+@searches_router.get("/")
+def get_saved_searches():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM saved_searches ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@searches_router.post("/")
+def save_search(body: SearchSave):
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO saved_searches (name, description, filters_json) VALUES (?, ?, ?)",
+        (body.name, body.description, body.filters_json)
+    )
+    sid = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM saved_searches WHERE id = ?", (sid,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@searches_router.delete("/{search_id}")
+def delete_saved_search(search_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM saved_searches WHERE id = ?", (search_id,))
     conn.commit()
     conn.close()
     return {"ok": True}

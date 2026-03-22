@@ -1,11 +1,19 @@
-from fastapi import APIRouter
+import pandas as pd
+from fastapi import APIRouter, HTTPException
 from typing import Optional
 
 from database.connection import run_query
 from models.clustering import get_team_styles
-from config import CHELSEA_TEAM_ID, MIN_MINUTES
+from models.performance_score import calculate_performance_scores
+from config import CHELSEA_TEAM_ID, MIN_MINUTES, POSITION_MAP
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
+
+
+def _normalize_position(pos: str) -> str:
+    if not pos:
+        return "MID"
+    return POSITION_MAP.get(pos.strip(), "MID")
 
 
 @router.get("/styles")
@@ -17,60 +25,145 @@ def team_styles(season: Optional[str] = None):
 
 
 @router.get("/chelsea")
-def chelsea_focus(season: Optional[str] = None):
-    where_clauses = [
-        "pss.team_id = :team_id",
-        "pss.minutes >= :min_minutes"
-    ]
-    params: dict = {"team_id": CHELSEA_TEAM_ID, "min_minutes": MIN_MINUTES}
-
-    if season:
-        where_clauses.append("s.season_name = :season")
-        params["season"] = season
-
-    where_sql = " AND ".join(where_clauses)
-
-    sql = f"""
+def chelsea_focus(season: str = "2025-26"):
+    stats_sql = """
         SELECT
-            p.player_id,
-            p.player_name,
-            p.position,
-            pss.minutes,
-            pss.goals,
-            pss.assists,
-            pss.xg,
-            pss.xa,
-            pss.sofascore_rating AS rating,
-            EXTRACT(YEAR FROM AGE(p.date_of_birth)) AS age
+            COUNT(DISTINCT pss.player_id) AS squad_size,
+            ROUND(AVG(EXTRACT(YEAR FROM AGE(NOW(), p.date_of_birth)))::numeric, 1) AS avg_age
         FROM player_season_stats pss
         JOIN players p ON pss.player_id = p.player_id
         JOIN seasons s ON pss.season_id = s.season_id
-        WHERE {where_sql}
-        ORDER BY pss.sofascore_rating DESC NULLS LAST
+        WHERE pss.team_id = :team_id
+        AND s.season_name = :season
+        AND pss.minutes > 0
     """
+    stats_df = run_query(stats_sql, {"team_id": CHELSEA_TEAM_ID, "season": season})
 
-    df = run_query(sql, params)
-    if df.empty:
-        return {"team": "Chelsea FC", "players": [], "stats": {}}
+    scores = calculate_performance_scores(season=season)
+    top3 = []
+    avg_score = 0.0
 
-    import pandas as pd
-    num_cols = ["minutes", "goals", "assists", "xg", "xa", "rating", "age"]
-    for col in num_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    if not scores.empty:
+        chelsea_scores = scores[
+            scores["team_name"].str.contains("Chelsea", case=False, na=False)
+        ]
+        if not chelsea_scores.empty:
+            top3 = (
+                chelsea_scores.nlargest(3, "score")[
+                    ["player_id", "player_name", "position_group", "score"]
+                ]
+                .fillna(0)
+                .to_dict("records")
+            )
+            avg_score = round(float(chelsea_scores["score"].mean()), 1)
 
-    df = df.rename(columns={"minutes": "minutes_played"})
-
-    stats = {
-        "squad_size": len(df),
-        "avg_age": round(float(df["age"].mean()), 1),
-        "avg_rating": round(float(df["rating"].mean()), 2),
-        "total_goals": int(df["goals"].sum()),
-        "total_assists": int(df["assists"].sum()),
+    row = stats_df.iloc[0] if not stats_df.empty else {}
+    return {
+        "squad_size": int(row.get("squad_size", 0)),
+        "avg_age": float(row.get("avg_age", 0) or 0),
+        "avg_score": avg_score,
+        "top3": top3,
+        "season": season,
     }
 
+
+@router.get("/chelsea/full")
+def chelsea_full(season: str = "2025-26"):
+    return _get_team_players_internal(CHELSEA_TEAM_ID, season)
+
+
+@router.get("/{team_id}")
+def get_team(team_id: int, season: str = "2025-26"):
+    sql = """
+        SELECT t.team_id, t.team_name, l.league_name,
+               COUNT(DISTINCT pss.player_id) as squad_size,
+               ROUND(AVG(EXTRACT(YEAR FROM AGE(NOW(), p.date_of_birth)))::numeric, 1) as avg_age,
+               ROUND(AVG(pss.sofascore_rating)::numeric, 2) as avg_rating,
+               AVG(pss.xg) as avg_xg,
+               AVG(pss.xa) as avg_xa,
+               AVG(pss.accurate_passes_pct) as avg_pass_pct,
+               AVG(pss.aerials_won) as avg_aerials,
+               AVG(pss.tackles_won) as avg_tackles,
+               AVG(pss.key_passes) as avg_key_passes,
+               AVG(pss.recoveries) as avg_recoveries
+        FROM player_season_stats pss
+        JOIN players p ON pss.player_id = p.player_id
+        JOIN teams t ON pss.team_id = t.team_id
+        JOIN leagues l ON pss.league_id = l.league_id
+        JOIN seasons s ON pss.season_id = s.season_id
+        WHERE t.team_id = :team_id
+        AND s.season_name = :season
+        AND pss.minutes > 0
+        GROUP BY t.team_id, t.team_name, l.league_name
+    """
+    team = run_query(sql, {"team_id": team_id, "season": season})
+    if team.empty:
+        raise HTTPException(status_code=404, detail="Team not found")
+    return team.iloc[0].fillna(0).to_dict()
+
+
+@router.get("/{team_id}/players")
+def get_team_players(team_id: int, season: str = "2025-26"):
+    result = _get_team_players_internal(team_id, season)
+    return result
+
+
+def _get_team_players_internal(team_id: int, season: str):
+    sql = """
+        SELECT
+            p.player_id, p.player_name, p.position, p.nationality,
+            EXTRACT(YEAR FROM AGE(NOW(), p.date_of_birth))::int AS age,
+            pss.minutes,
+            pss.goals, pss.assists,
+            ROUND(pss.xg::numeric, 2) AS xg,
+            ROUND(pss.xa::numeric, 2) AS xa,
+            pss.aerials_won,
+            pss.tackles_won,
+            ROUND(pss.sofascore_rating::numeric, 2) AS rating,
+            pss.key_passes,
+            pss.interceptions,
+            COALESCE(pss.clearances, 0) AS clearances,
+            pss.accurate_passes_pct,
+            pss.recoveries,
+            t.team_name,
+            l.league_name
+        FROM player_season_stats pss
+        JOIN players p ON pss.player_id = p.player_id
+        JOIN teams t ON pss.team_id = t.team_id
+        JOIN leagues l ON pss.league_id = l.league_id
+        JOIN seasons s ON pss.season_id = s.season_id
+        WHERE pss.team_id = :team_id
+        AND s.season_name = :season
+        AND pss.minutes > 0
+        ORDER BY pss.minutes DESC
+    """
+    players_df = run_query(sql, {"team_id": team_id, "season": season})
+
+    if players_df.empty:
+        return {"team_name": "Unknown", "league": "", "season": season, "players": []}
+
+    players_df["position_group"] = players_df["position"].apply(_normalize_position)
+
+    scores = calculate_performance_scores(season=season)
+    if not scores.empty:
+        players_df = players_df.merge(
+            scores[["player_id", "score", "percentile", "score_label"]],
+            on="player_id", how="left"
+        )
+
+    num_cols = ["age", "minutes", "goals", "assists", "xg", "xa",
+                "aerials_won", "tackles_won", "rating", "key_passes",
+                "score", "percentile", "interceptions", "clearances"]
+    for col in num_cols:
+        if col in players_df.columns:
+            players_df[col] = pd.to_numeric(players_df[col], errors="coerce").fillna(0)
+
+    team_name = str(players_df.iloc[0].get("team_name", "Team")) if not players_df.empty else "Team"
+    league_name = str(players_df.iloc[0].get("league_name", "")) if not players_df.empty else ""
+
     return {
-        "team": "Chelsea FC",
-        "stats": stats,
-        "players": df.fillna(0).to_dict(orient="records"),
+        "team_name": team_name,
+        "league": league_name,
+        "season": season,
+        "players": players_df.fillna(0).to_dict("records"),
     }

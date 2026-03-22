@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import players, teams, analytics, search, lists, dashboard
+from routers import players, teams, analytics, search, lists, dashboard, rankings
+from routers.lists import notes_router, searches_router
 
 app = FastAPI(title="ScoutIQ API", version="1.0.0", description="Football scouting intelligence platform")
 
@@ -18,7 +19,10 @@ app.include_router(teams.router)
 app.include_router(analytics.router)
 app.include_router(search.router)
 app.include_router(lists.router)
+app.include_router(notes_router)
+app.include_router(searches_router)
 app.include_router(dashboard.router)
+app.include_router(rankings.router)
 
 
 @app.get("/health")
