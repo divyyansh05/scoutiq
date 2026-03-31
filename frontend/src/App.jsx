@@ -12,6 +12,7 @@ import LeagueCoverage from './pages/LeagueCoverage'
 import TeamProfile from './pages/TeamProfile'
 import Rankings from './pages/Rankings'
 import MetricWeighting from './pages/MetricWeighting'
+import ChelseaTeam from './pages/ChelseaTeam'
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="rankings"     element={<Rankings />} />
           <Route path="weighting"    element={<MetricWeighting />} />
           <Route path="teams/:teamId" element={<TeamProfile />} />
+          <Route path="chelsea"      element={<ChelseaTeam />} />
         </Route>
       </Routes>
     </BrowserRouter>

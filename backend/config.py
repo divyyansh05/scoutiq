@@ -3,8 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5434/football_data")
-
 # Chelsea FC team ID from the football database (override via env)
 CHELSEA_TEAM_ID = int(os.getenv("CHELSEA_TEAM_ID", "0"))
 
