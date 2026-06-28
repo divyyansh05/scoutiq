@@ -114,8 +114,10 @@ const BASE_STYLES = `
     font-size: 10px; color: #334155;
   }
   @media print {
-    body { background: #060e20 !important; padding: 20px 24px; }
+    body { background: #060e20 !important; padding: 20px 24px; color: #dee5ff !important; }
     @page { size: A4 landscape; margin: 10mm; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    a { text-decoration: none; }
   }
 `
 
@@ -125,6 +127,8 @@ function openHTML(html, filename) {
   win.document.write(html)
   win.document.close()
   win.document.title = filename
+  // Auto-trigger print dialog so user can Save as PDF immediately
+  win.addEventListener('load', () => setTimeout(() => win.print(), 250))
 }
 
 // ── Player Search / Scouting List Report ───────────────────────────────────
