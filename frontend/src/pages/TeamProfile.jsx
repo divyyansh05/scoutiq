@@ -5,7 +5,7 @@ import { getTeamPriorityPositions, getTeamSwot } from '../api/client'
 import PositionBadge from '../components/PositionBadge'
 import ScoreRing from '../components/ScoreRing'
 import RadarChart from '../components/RadarChart'
-import { exportToCSV } from '../utils/export'
+import { exportSquadReport } from '../utils/export'
 const SEASONS = ['All Seasons', '2025-26', '2024-25', '2023-24', '2022-23']
 
 const POSITIONS = ['ALL', 'GK', 'DEF', 'MID', 'WNG', 'FWD']
@@ -142,7 +142,7 @@ export default function TeamProfile() {
           >
             {SEASONS.filter(s => s !== 'All Seasons').map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <button onClick={() => exportToCSV(filtered, `${team.team_name}_squad`)} className="btn-secondary text-xs flex items-center gap-2">
+          <button onClick={() => exportSquadReport(filtered, team.team_name, team.league_name)} className="btn-secondary text-xs flex items-center gap-2">
             <span className="material-symbols-outlined text-sm">download</span>
             Export
           </button>

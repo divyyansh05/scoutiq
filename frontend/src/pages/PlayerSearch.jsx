@@ -4,7 +4,7 @@ import { searchPlayers, getProfiles, getProfilePlayers, getAllTeams } from '../a
 import api from '../api/client'
 import PlayerCard from '../components/PlayerCard'
 import ComparisonBar from '../components/ComparisonBar'
-import { exportToCSV } from '../utils/export'
+import { exportPlayersReport } from '../utils/export'
 const SEASONS = ['All Seasons', '2025-26', '2024-25', '2023-24', '2022-23']
 
 const POSITIONS = ['', 'GK', 'DEF', 'MID', 'WNG', 'FWD']
@@ -219,7 +219,7 @@ export default function PlayerSearch() {
   }
 
   const handleExport = () => {
-    exportToCSV(profileMode ? profileResults : results, 'player_search')
+    const ctx = [controls.position !== 'ALL' ? controls.position : '', controls.competition].filter(Boolean).join(' · '); exportPlayersReport(profileMode ? profileResults : results, 'Player Search Results', ctx)
   }
 
   const profileGroups = groupProfilesByPosition(profiles)

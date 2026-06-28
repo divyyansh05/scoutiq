@@ -4,7 +4,7 @@ import { globalSearch, getPlayer, getSimilarPlayers, getSimilarPlayersGlobal } f
 import api from '../api/client'
 import PositionBadge from '../components/PositionBadge'
 import RadarChart from '../components/RadarChart'
-import { exportToCSV } from '../utils/export'
+import { exportPlayersReport } from '../utils/export'
 import { useSeasons } from '../hooks/useSeasons'
 import useApiError from '../hooks/useApiError'
 import ErrorBanner from '../components/ErrorBanner'
@@ -270,7 +270,7 @@ export default function SimilarPlayers() {
           </div>
           {similar.length > 0 && (
             <div className="mt-5">
-              <button onClick={() => exportToCSV(similar, 'similar_players')} className="btn-secondary text-xs flex items-center gap-1">
+              <button onClick={() => exportPlayersReport(similar, 'Similar Players', target?.player_name ? 'Similar to ' + target.player_name : '')} className="btn-secondary text-xs flex items-center gap-1">
                 <span className="material-symbols-outlined text-sm">download</span>
                 Export
               </button>

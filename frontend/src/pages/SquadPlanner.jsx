@@ -1,3 +1,4 @@
+import { exportSquadPlanReport } from '../utils/export'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import PositionBadge from '../components/PositionBadge'
 import ScoreRing from '../components/ScoreRing'
@@ -352,7 +353,7 @@ function SummaryPanel({ slots, onExport }) {
         className="flex items-center justify-center gap-2 px-4 py-3 bg-surface-container rounded-2xl text-on-surface/70 hover:text-on-surface hover:bg-surface-container-high transition-colors text-sm font-headline font-bold"
       >
         <span className="material-symbols-outlined text-base">download</span>
-        Export as Text
+        Export Report
       </button>
     </div>
   )
@@ -740,30 +741,10 @@ export default function SquadPlanner() {
     }
   }
 
-  // ── Export as text ─────────────────────────────────────────────────────
+  // ── Export as visual HTML report ─────────────────────────────────────────
 
   function handleExport() {
-    const lines = [`${planName}`, '='.repeat(planName.length), '']
-    POSITION_GROUPS.forEach((pos) => {
-      const posSlots = slots.filter((s) => s.position_group === pos)
-      if (posSlots.length === 0) return
-      lines.push(POSITION_LABELS[pos].toUpperCase())
-      posSlots.forEach((s) => {
-        const score = s.performance_score != null ? ` [${s.performance_score.toFixed(1)}]` : ''
-        const age = s.age ? ` (${s.age})` : ''
-        const role = s.squad_role !== 'first_team' ? ` — ${SQUAD_ROLES.find(r => r.value === s.squad_role)?.label}` : ''
-        lines.push(`  • ${s.player_name}${age}${score}${role}`)
-      })
-      lines.push('')
-    })
-    const text = lines.join('\n')
-    const blob = new Blob([text], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${planName.replace(/\s+/g, '_')}.txt`
-    a.click()
-    URL.revokeObjectURL(url)
+    exportSquadPlanReport(slots, planName, plan?.team_name || '')
   }
 
   // ── Filtered available players ─────────────────────────────────────────

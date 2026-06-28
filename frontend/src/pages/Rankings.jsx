@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getRankings } from '../api/client'
 import PositionBadge from '../components/PositionBadge'
-import { exportToCSV } from '../utils/export'
+import { exportRankingsReport } from '../utils/export'
 import useApiError from '../hooks/useApiError'
 import ErrorBanner from '../components/ErrorBanner'
 import { useLeagues } from '../hooks/useLeagues'
@@ -52,7 +52,7 @@ export default function Rankings() {
           <h1 className="text-4xl font-headline font-black text-on-surface">Statistical Rankings</h1>
           <p className="text-on-surface-variant text-sm mt-1">Cross-league leaderboard for any metric.</p>
         </div>
-        <button onClick={() => exportToCSV(data.rankings, `rankings_${controls.metric}`)} className="btn-secondary flex items-center gap-2">
+        <button onClick={() => exportRankingsReport(data.rankings, controls.metric, controls.per90, controls.competition)} className="btn-secondary flex items-center gap-2">
           <span className="material-symbols-outlined text-sm">download</span>
           Export CSV
         </button>

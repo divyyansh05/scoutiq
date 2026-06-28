@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getWeightedRanking } from '../api/client'
 import PositionBadge from '../components/PositionBadge'
-import { exportToCSV } from '../utils/export'
+import { exportWeightedReport } from '../utils/export'
 import useApiError from '../hooks/useApiError'
 import ErrorBanner from '../components/ErrorBanner'
 import { useSeasons } from '../hooks/useSeasons'
@@ -207,7 +207,7 @@ export default function MetricWeighting() {
             <div className="bg-surface-container rounded-xl overflow-hidden">
               <div className="px-5 py-4 border-b border-outline-variant/10 flex items-center justify-between">
                 <p className="label-xs">{results.length} players ranked</p>
-                <button onClick={() => exportToCSV(results, 'weighted_ranking')} className="btn-secondary text-xs flex items-center gap-2">
+                <button onClick={() => exportWeightedReport(results, weights)} className="btn-secondary text-xs flex items-center gap-2">
                   <span className="material-symbols-outlined text-sm">download</span>
                   Export
                 </button>
