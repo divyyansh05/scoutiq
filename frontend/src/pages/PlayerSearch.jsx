@@ -219,7 +219,7 @@ export default function PlayerSearch() {
   }
 
   const handleExport = () => {
-    const ctx = [controls.position !== 'ALL' ? controls.position : '', controls.competition].filter(Boolean).join(' · '); exportPlayersReport(profileMode ? profileResults : results, 'Player Search Results', ctx)
+    const ctx = [filters.position, filters.league].filter(Boolean).join(" · "); exportPlayersReport(profileMode ? profileResults : results, "Player Search Results", ctx)
   }
 
   const profileGroups = groupProfilesByPosition(profiles)

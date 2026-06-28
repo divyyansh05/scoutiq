@@ -123,12 +123,18 @@ const BASE_STYLES = `
 
 function openHTML(html, filename) {
   const win = window.open('', '_blank')
-  if (!win) return
-  win.document.write(html)
+  if (!win) {
+    alert('Please allow pop-ups for this site to generate reports.')
+    return
+  }
+  // Inject print-trigger script inside the HTML so timing is guaranteed
+  const printable = html.replace(
+    '</body>',
+    '<script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script></body>'
+  )
+  win.document.write(printable)
   win.document.close()
   win.document.title = filename
-  // Auto-trigger print dialog so user can Save as PDF immediately
-  win.addEventListener('load', () => setTimeout(() => win.print(), 250))
 }
 
 // ── Player Search / Scouting List Report ───────────────────────────────────
@@ -451,8 +457,7 @@ export function exportSquadReport(players, teamName, competition = '') {
 
 // ── Squad Planner Visual Report ────────────────────────────────────────────
 
-export function exportSquadPlanReport(slots, planName, teamName = '') {
-  if (!slots?.length) return
+export function exportSquadPlanReport(slots = [], planName, teamName = '') {
   const date = today()
 
   const byPos = { GK: [], DEF: [], MID: [], FWD: [] }

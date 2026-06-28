@@ -744,7 +744,8 @@ export default function SquadPlanner() {
   // ── Export as visual HTML report ─────────────────────────────────────────
 
   function handleExport() {
-    exportSquadPlanReport(slots, planName, plan?.team_name || '')
+    const resolvedTeamName = KNOWN_TEAMS.find(t => t.team_id === teamId)?.name || ''
+    exportSquadPlanReport(slots, planName, resolvedTeamName)
   }
 
   // ── Filtered available players ─────────────────────────────────────────
