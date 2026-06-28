@@ -3,33 +3,36 @@ import { useNavigate } from 'react-router-dom'
 import { getRankings } from '../api/client'
 import PositionBadge from '../components/PositionBadge'
 import { exportToCSV } from '../utils/export'
-import { SEASONS } from './Dashboard'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
+import { useLeagues } from '../hooks/useLeagues'
 
 const POSITIONS_FILTER = ['', 'GK', 'DEF', 'MID', 'WNG', 'FWD']
-const LEAGUES = ['', 'Premier League', 'La Liga', 'Serie A', 'Bundesliga', 'Ligue 1']
 
 const MEDAL = { 1: '#f59e0b', 2: '#94a3b8', 3: '#cd7c3f' }
 
 export default function Rankings() {
   const navigate = useNavigate()
+  const { leagueOptions } = useLeagues()
   const [data, setData] = useState({ rankings: [], metric: 'xg', metric_label: 'xG', per90: true, total: 0, available_metrics: [] })
   const [controls, setControls] = useState({
     metric: 'xg',
-    season: '2025-26',
+    competition: '',
     position: '',
-    league: '',
     min_minutes: 450,
     per90: true,
     limit: 50,
   })
   const [loading, setLoading] = useState(false)
+  const [error, handleError, clearError] = useApiError()
 
   const fetchRankings = useCallback(async () => {
     setLoading(true)
     try {
       const res = await getRankings(controls)
       setData(res.data)
-    } catch {
+    } catch (e) {
+      handleError(e)
       setData(d => ({ ...d, rankings: [] }))
     } finally {
       setLoading(false)
@@ -42,6 +45,7 @@ export default function Rankings() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       <div className="mb-8 flex items-end justify-between">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">Analysis</p>
@@ -57,13 +61,16 @@ export default function Rankings() {
       {/* Controls */}
       <div className="bg-surface-container rounded-xl p-5 mb-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
         <div>
-          <label className="label-xs block mb-1.5">Season</label>
+          <label className="label-xs block mb-1.5">Competition</label>
           <select
-            value={controls.season}
-            onChange={e => setC('season', e.target.value)}
+            value={controls.competition}
+            onChange={e => setC('competition', e.target.value)}
             className="w-full bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2 border border-outline-variant/20 focus:outline-none"
           >
-            {SEASONS.filter(s => s !== 'All Seasons').map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="">All Competitions</option>
+            {leagueOptions.filter(l => l.name).map(l => (
+              <option key={l.name} value={l.name}>{l.name}</option>
+            ))}
           </select>
         </div>
 
@@ -86,17 +93,6 @@ export default function Rankings() {
             className="w-full bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2 border border-outline-variant/20 focus:outline-none"
           >
             {POSITIONS_FILTER.map(p => <option key={p} value={p}>{p || 'All'}</option>)}
-          </select>
-        </div>
-
-        <div>
-          <label className="label-xs block mb-1.5">League</label>
-          <select
-            value={controls.league}
-            onChange={e => setC('league', e.target.value)}
-            className="w-full bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2 border border-outline-variant/20 focus:outline-none"
-          >
-            {LEAGUES.map(l => <option key={l} value={l}>{l || 'All Leagues'}</option>)}
           </select>
         </div>
 
@@ -158,7 +154,7 @@ export default function Rankings() {
                     #{rank}
                   </span>
                   <div className="flex-1 min-w-0">
-                    <p className="font-headline font-bold text-on-surface truncate">{p.player_name}</p>
+                    <p className="font-headline font-bold text-on-surface truncate">{p.name || p.player_name}</p>
                     <p className="text-xs text-on-surface-variant truncate">{p.team_name} · {p.league_name}</p>
                   </div>
                   <PositionBadge position={p.position_group} />

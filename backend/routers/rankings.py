@@ -2,100 +2,116 @@ from fastapi import APIRouter, Query
 from typing import Optional
 
 from database.connection import run_query
-from config import POSITION_MAP
 
 router = APIRouter(prefix="/api/rankings", tags=["rankings"])
 
 ALLOWED_METRICS = [
-    "xg", "xa", "npxg", "goals", "assists", "shots", "key_passes",
-    "sofascore_rating", "aerials_won", "tackles_won", "interceptions",
-    "clearances", "recoveries", "accurate_passes_pct", "accurate_final_third",
-    "big_chances_created", "dispossessed", "minutes", "accurate_long_balls",
-    "fouls_won", "dribbles_completed", "possession_won_att_third",
-    "shots_inside_box", "touches",
+    "goals", "assists", "xg", "xa", "npxg", "shots", "shots_on_target",
+    "key_passes", "dribbles_successful", "progressive_runs", "touches_in_box",
+    "interceptions", "clearances", "recoveries", "aerial_duels_won",
+    "passes", "passes_accurate", "defensive_duels_won", "offensive_duels_won",
+    "fouls_committed", "fouls_suffered",
 ]
 
 METRIC_LABELS = {
-    "xg": "xG", "xa": "xA", "npxg": "npxG", "goals": "Goals",
-    "assists": "Assists", "shots": "Shots", "key_passes": "Key Passes",
-    "sofascore_rating": "Rating", "aerials_won": "Aerials Won",
-    "tackles_won": "Tackles Won", "interceptions": "Interceptions",
-    "clearances": "Clearances", "recoveries": "Recoveries",
-    "accurate_passes_pct": "Pass Acc%", "accurate_final_third": "Final Third Passes",
-    "big_chances_created": "Big Chances Created", "dispossessed": "Dispossessed",
-    "minutes": "Minutes", "accurate_long_balls": "Accurate Long Balls",
-    "fouls_won": "Fouls Won", "dribbles_completed": "Dribbles",
-    "possession_won_att_third": "Poss. Won Att Third",
-    "shots_inside_box": "Shots Inside Box", "touches": "Touches",
+    "goals": "Goals", "assists": "Assists", "xg": "xG", "xa": "xA",
+    "npxg": "npxG", "shots": "Shots", "shots_on_target": "Shots on Target",
+    "key_passes": "Key Passes", "dribbles_successful": "Dribbles",
+    "progressive_runs": "Progressive Runs", "touches_in_box": "Touches in Box",
+    "interceptions": "Interceptions", "clearances": "Clearances",
+    "recoveries": "Recoveries", "aerial_duels_won": "Aerials Won",
+    "passes": "Passes", "passes_accurate": "Accurate Passes",
+    "defensive_duels_won": "Defensive Duels Won",
+    "offensive_duels_won": "Offensive Duels Won",
+    "fouls_committed": "Fouls", "fouls_suffered": "Fouls Won",
 }
 
-NON_PER90_METRICS = {"sofascore_rating", "accurate_passes_pct", "minutes"}
-
-
-def _normalize_position(pos: str) -> str:
-    if not pos:
-        return "MID"
-    return POSITION_MAP.get(pos.strip(), "MID")
+NON_PER90_METRICS: set = set()
 
 
 @router.get("/")
 def get_rankings(
     metric: str = Query("xg"),
-    season: str = Query("2025-26"),
-    position: Optional[str] = None,
+    competition: Optional[str] = None,
     league: Optional[str] = None,
-    min_minutes: int = Query(450, ge=100, le=3400),
+    position: Optional[str] = None,
+    min_minutes: int = Query(450, ge=100, le=9000),
     per90: bool = Query(True),
     limit: int = Query(50, ge=1, le=200),
+    # legacy ignored
+    season: Optional[str] = None,
 ):
+    import pandas as pd
+
     if metric not in ALLOWED_METRICS:
         metric = "xg"
 
-    league_filter = "AND l.league_name = :league" if league else ""
+    comp_filter = competition or league
+
+    where = ["pms.minutes_played > 0"]
+    params: dict = {"min_minutes": min_minutes, "limit": limit}
+
+    if comp_filter:
+        where.append("pms.competition_name = :competition")
+        params["competition"] = comp_filter
+
+    pos_where = ""
+    pos_upper = position.upper() if position else None
+    if pos_upper and pos_upper in ("GK", "DEF", "MID", "FWD"):
+        pos_where = "AND p.position_group = :position"
+        params["position"] = pos_upper
+
+    where_sql = " AND ".join(where)
 
     sql = f"""
-        SELECT p.player_id, p.player_name, p.position, p.nationality,
-               EXTRACT(YEAR FROM AGE(NOW(), p.date_of_birth))::int AS age,
-               t.team_name, l.league_name, s.season_name,
-               pss.minutes,
-               COALESCE(pss.{metric}, 0) AS metric_value
-        FROM player_season_stats pss
-        JOIN players p ON pss.player_id = p.player_id
-        JOIN teams t ON pss.team_id = t.team_id
-        JOIN leagues l ON pss.league_id = l.league_id
-        JOIN seasons s ON pss.season_id = s.season_id
-        WHERE s.season_name = :season
-        AND pss.minutes >= :min_minutes
-        AND p.position IS NOT NULL
-        {league_filter}
-        ORDER BY pss.{metric} DESC NULLS LAST
+        SELECT
+            p.player_id,
+            p.name,
+            p.primary_position,
+            p.position_group,
+            p.nationality,
+            EXTRACT(YEAR FROM AGE(p.date_of_birth))::int AS age,
+            p.current_team_name AS team_name,
+            pms.competition_name AS league_name,
+            SUM(pms.minutes_played)                       AS minutes,
+            COUNT(*)                                       AS matches,
+            COALESCE(SUM(pms.{metric}), 0)                AS total,
+            ROUND(
+                COALESCE(SUM(pms.{metric}), 0)::numeric
+                / NULLIF(SUM(pms.minutes_played),0) * 90, 3
+            )                                             AS per90
+        FROM player_match_stats pms
+        JOIN players p ON p.player_id = pms.player_id
+        WHERE {where_sql}
+        {pos_where}
+        GROUP BY p.player_id, p.name, p.primary_position, p.position_group,
+                 p.nationality, p.date_of_birth, p.current_team_name,
+                 pms.competition_name
+        HAVING SUM(pms.minutes_played) >= :min_minutes
+        ORDER BY {"per90" if per90 else "total"} DESC NULLS LAST
         LIMIT :limit
     """
 
-    params: dict = {"season": season, "min_minutes": min_minutes, "limit": limit}
-    if league:
-        params["league"] = league
-
-    import pandas as pd
     df = run_query(sql, params)
     if df.empty:
-        return {"rankings": [], "metric": metric, "metric_label": METRIC_LABELS.get(metric, metric), "per90": per90}
+        return {
+            "rankings": [], "metric": metric,
+            "metric_label": METRIC_LABELS.get(metric, metric),
+            "per90": per90, "total": 0,
+            "available_metrics": [{"key": k, "label": v} for k, v in METRIC_LABELS.items()],
+        }
 
-    df["position_group"] = df["position"].apply(_normalize_position)
-
-    for col in ["minutes", "metric_value", "age"]:
+    for col in ["minutes", "total", "per90", "age"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    if position and position.upper() in ["GK", "DEF", "MID", "WNG", "FWD"]:
-        df = df[df["position_group"] == position.upper()]
-
-    if per90 and metric not in NON_PER90_METRICS:
-        df["metric_value"] = (df["metric_value"] / (df["minutes"] / 90).clip(lower=1)).round(3)
-        df = df.sort_values("metric_value", ascending=False)
-
+    df["metric_value"] = df["per90"] if per90 else df["total"]
     df = df.reset_index(drop=True)
     df["rank"] = range(1, len(df) + 1)
+
+    # Backward-compat alias
+    df["player_name"] = df["name"]
+    df["season_name"] = comp_filter or "All Competitions"
 
     return {
         "rankings": df.fillna(0).to_dict("records"),

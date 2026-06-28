@@ -5,7 +5,9 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
 import { getScatter } from '../api/client'
-import { SEASONS } from './Dashboard'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
+import { useSeasons } from '../hooks/useSeasons'
 
 const POSITION_COLORS = {
   FWD: '#ef4444',
@@ -43,26 +45,27 @@ function CustomTooltip({ active, payload }) {
 
 export default function ScatterPlot() {
   const navigate = useNavigate()
+  const { seasonOptions } = useSeasons()
   const [data, setData] = useState([])
   const [meta, setMeta] = useState({ metrics: [], x_label: 'xG/90', y_label: 'xA/90', top_outlier: '', last_updated: 'Live' })
   const [xMetric, setXMetric] = useState('xg_per90')
   const [yMetric, setYMetric] = useState('xa_per90')
-  const [positions, setPositions] = useState({ GK: true, DEF: true, MID: true, WNG: true, FWD: true })
+  const [positions, setPositions] = useState({ GK: true, DEF: true, MID: true, FWD: true })
   const [minMinutes, setMinMinutes] = useState(450)
-  const [season, setSeason] = useState('2025-26')
+  const [competition, setCompetition] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, handleError, clearError] = useApiError()
 
   const fetchData = useCallback(async () => {
     setLoading(true)
     const activePOS = Object.entries(positions).filter(([, v]) => v).map(([k]) => k).join(',')
-    const seasonParam = season === 'All Seasons' ? undefined : season
     try {
       const res = await getScatter({
         x_metric: xMetric,
         y_metric: yMetric,
         min_minutes: minMinutes,
         positions: activePOS || undefined,
-        season: seasonParam,
+        ...(competition && { competition }),
       })
       setData(res.data.data || [])
       setMeta({
@@ -72,12 +75,13 @@ export default function ScatterPlot() {
         top_outlier: res.data.top_outlier || '',
         last_updated: res.data.last_updated || 'Live',
       })
-    } catch {
+    } catch (e) {
+      handleError(e)
       setData([])
     } finally {
       setLoading(false)
     }
-  }, [xMetric, yMetric, minMinutes, positions, season])
+  }, [xMetric, yMetric, minMinutes, positions, competition])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -91,6 +95,7 @@ export default function ScatterPlot() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       <div className="mb-8">
         <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">Analysis</p>
         <h1 className="text-4xl font-headline font-black text-on-surface">Scatter Analysis</h1>
@@ -102,13 +107,16 @@ export default function ScatterPlot() {
       {/* Controls */}
       <div className="bg-surface-container rounded-xl p-5 mb-6 grid grid-cols-2 md:grid-cols-5 gap-4 items-end">
         <div>
-          <label className="label-xs block mb-1.5">Season</label>
+          <label className="label-xs block mb-1.5">Competition</label>
           <select
-            value={season}
-            onChange={e => setSeason(e.target.value)}
+            value={competition}
+            onChange={e => setCompetition(e.target.value)}
             className="w-full bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2 border border-outline-variant/20 focus:outline-none"
           >
-            {SEASONS.map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="">All Competitions</option>
+            {seasonOptions.filter(s => s.name).map(s => (
+              <option key={s.name} value={s.name}>{s.name}</option>
+            ))}
           </select>
         </div>
 

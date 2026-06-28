@@ -4,13 +4,18 @@ import TopNav from './TopNav'
 const navItems = [
   { path: '/',           label: 'DASHBOARD',        icon: 'dashboard' },
   { path: '/players',    label: 'PLAYER SEARCH',    icon: 'search' },
-  { path: '/lists',      label: 'SCOUTING LISTS',   icon: 'format_list_bulleted' },
-  { path: '/similar',    label: 'SIMILAR PLAYERS',  icon: 'groups' },
+  { path: '/lists',               label: 'SCOUTING LISTS',   icon: 'format_list_bulleted' },
+  { path: '/recruitment',         label: 'RECRUITMENT',      icon: 'assignment_ind' },
+  { path: '/profiles/shortlist',  label: 'PROFILE SEARCH',   icon: 'manage_search' },
+  { path: '/squad-gap',           label: 'SQUAD DIAGNOSTIC', icon: 'health_metrics' },
+  { path: '/planner',             label: 'SQUAD PLANNER',    icon: 'view_list' },
+  { path: '/similar',             label: 'SIMILAR PLAYERS',  icon: 'groups' },
   { path: '/talent',     label: 'EMERGING TALENT',  icon: 'star' },
   { path: '/team-style', label: 'TEAM STYLE',       icon: 'hub' },
   { path: '/scatter',    label: 'SCATTER PLOT',     icon: 'scatter_plot' },
   { path: '/rankings',   label: 'RANKINGS',         icon: 'leaderboard' },
   { path: '/weighting',  label: 'METRIC WEIGHTING', icon: 'tune' },
+  { path: '/tactical',   label: 'TACTICAL FIT',     icon: 'sports_soccer' },
   { path: '/coverage',   label: 'DATA COVERAGE',    icon: 'database' },
 ]
 

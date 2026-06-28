@@ -25,7 +25,9 @@ export default function TopNav() {
     setOpen(false)
     setQuery('')
     if (item.type === 'player') {
-      navigate(`/players/${item.player_id}`)
+      navigate(`/players/${item.id}`)
+    } else if (item.type === 'team') {
+      navigate(`/teams/${item.id}`)
     }
   }
 
@@ -66,12 +68,6 @@ export default function TopNav() {
       </div>
 
       <div className="flex items-center gap-4">
-        <button className="text-slate-400 hover:text-white p-2 rounded-full transition-all">
-          <span className="material-symbols-outlined">notifications</span>
-        </button>
-        <button className="text-slate-400 hover:text-white p-2 rounded-full transition-all">
-          <span className="material-symbols-outlined">settings</span>
-        </button>
         <div className="w-8 h-8 rounded-full bg-surface-container-highest border border-primary/20 flex items-center justify-center">
           <span className="material-symbols-outlined text-primary text-base" style={{ fontVariationSettings: "'FILL' 1" }}>person</span>
         </div>

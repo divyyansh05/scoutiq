@@ -1,164 +1,163 @@
 """
-Player similarity engine using cosine similarity on position-normalised features.
+similarity.py — Player similarity via pgvector on player_scores.stat_vector.
+Rewritten for football_platform schema (no player_season_stats).
 """
 
-from __future__ import annotations
-
-import numpy as np
-import pandas as pd
+import logging
 from typing import Optional
+from sqlalchemy import text
 
-from database.connection import run_query
-from config import POSITION_MAP, MIN_MINUTES
-
-
-_FEATURE_COLS = [
-    "xg_per90", "xa_per90", "goals_per90", "assists_per90",
-    "shots_per90", "key_passes_per90", "dribbles_per90",
-    "aerials_per90", "tackles_per90", "interceptions_per90",
-    "recoveries_per90", "pass_accuracy", "rating",
-]
-
-_FETCH_SQL = """
-    SELECT
-        p.player_id,
-        p.player_name,
-        t.team_name,
-        l.league_name,
-        s.season_name,
-        p.position,
-        pss.minutes,
-        pss.xg,
-        pss.xa,
-        pss.goals,
-        pss.assists,
-        pss.shots,
-        pss.key_passes,
-        pss.dribbles_completed  AS dribbles,
-        pss.aerials_won,
-        pss.tackles_won,
-        pss.interceptions,
-        pss.recoveries,
-        pss.accurate_passes_pct AS pass_accuracy,
-        pss.sofascore_rating    AS rating
-    FROM player_season_stats pss
-    JOIN players  p ON pss.player_id  = p.player_id
-    JOIN teams    t ON pss.team_id    = t.team_id
-    JOIN leagues  l ON pss.league_id  = l.league_id
-    JOIN seasons  s ON pss.season_id  = s.season_id
-    WHERE pss.minutes >= :min_minutes
-    {extra_where}
-"""
-
-
-def _normalize_position(pos: str) -> str:
-    if not pos:
-        return "MID"
-    return POSITION_MAP.get(pos.strip(), "MID")
-
-
-def _build_features(df: pd.DataFrame) -> pd.DataFrame:
-    num_cols = [
-        "minutes", "xg", "xa", "goals", "assists", "shots",
-        "key_passes", "dribbles", "aerials_won", "tackles_won",
-        "interceptions", "recoveries", "pass_accuracy", "rating",
-    ]
-    for col in num_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-    mins = df["minutes"].clip(lower=1)
-    df["xg_per90"]            = df["xg"]           / mins * 90
-    df["xa_per90"]            = df["xa"]            / mins * 90
-    df["goals_per90"]         = df["goals"]         / mins * 90
-    df["assists_per90"]       = df["assists"]       / mins * 90
-    df["shots_per90"]         = df["shots"]         / mins * 90
-    df["key_passes_per90"]    = df["key_passes"]    / mins * 90
-    df["dribbles_per90"]      = df["dribbles"]      / mins * 90
-    df["aerials_per90"]       = df["aerials_won"]   / mins * 90
-    df["tackles_per90"]       = df["tackles_won"]   / mins * 90
-    df["interceptions_per90"] = df["interceptions"] / mins * 90
-    df["recoveries_per90"]    = df["recoveries"]    / mins * 90
-
-    df["position_group"] = df["position"].apply(_normalize_position)
-    return df
-
-
-def _cosine_similarity_matrix(matrix: np.ndarray) -> np.ndarray:
-    """Row-wise L2 normalise then dot-product for cosine similarity."""
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1e-9, norms)
-    normed = matrix / norms
-    return normed @ normed.T
+log = logging.getLogger('similarity')
 
 
 def get_similar_players(
     player_id: int,
-    season: Optional[str] = None,
+    db,
     n: int = 10,
-    same_league_only: bool = False,
-    league_filter: Optional[str] = None,
-    min_minutes: int = MIN_MINUTES,
-) -> pd.DataFrame:
-    extra_parts = []
-    params: dict = {"min_minutes": min_minutes}
+    min_minutes: int = 450,
+    same_role_only: bool = True,
+    # Legacy params ignored in new schema
+    season_id=None,
+    league_id=None,
+    exclude_same_team: bool = False,
+    **kwargs,
+) -> list[dict]:
+    n = min(n, 30)
 
-    if season:
-        extra_parts.append("AND s.season_name = :season")
-        params["season"] = season
-    if league_filter:
-        extra_parts.append("AND l.league_name = :league")
-        params["league"] = league_filter
+    target_sql = text("""
+        SELECT ps.stat_vector, ps.position_group, p.current_team_wyscout_id
+        FROM player_scores ps
+        JOIN players p ON ps.player_id = p.player_id
+        WHERE ps.player_id = :player_id AND ps.stat_vector IS NOT NULL
+        ORDER BY ps.performance_score DESC NULLS LAST
+        LIMIT 1
+    """)
+    target = db.execute(target_sql, {'player_id': player_id}).fetchone()
 
-    sql = _FETCH_SQL.format(extra_where=" ".join(extra_parts))
-    df = run_query(sql, params)
+    if not target or target.stat_vector is None:
+        log.warning(f"Player {player_id} has no stat_vector")
+        return []
 
-    if df.empty:
-        return pd.DataFrame()
+    target_vector = target.stat_vector
+    target_role = target.position_group
+    target_team_wyscout = target.current_team_wyscout_id
 
-    df = _build_features(df)
+    if isinstance(target_vector, str):
+        target_vector_str = target_vector
+    else:
+        target_vector_str = str(target_vector)
 
-    # Locate the target player
-    target_mask = df["player_id"] == player_id
-    if not target_mask.any():
-        return pd.DataFrame()
+    where = [
+        "ps.stat_vector IS NOT NULL",
+        "ps.player_id != :player_id",
+        "ps.minutes_total >= :min_minutes",
+    ]
+    params = {
+        'player_id': player_id,
+        'min_minutes': min_minutes,
+        'target_vector': target_vector_str,
+        'n': n,
+    }
 
-    target_row = df[target_mask].iloc[0]
-    target_pos = target_row["position_group"]
+    if same_role_only and target_role:
+        where.append("ps.position_group = :target_role")
+        params['target_role'] = target_role
 
-    # Filter to same position group
-    same_pos = df[df["position_group"] == target_pos].copy()
+    if exclude_same_team and target_team_wyscout:
+        where.append("p.current_team_wyscout_id != :target_team")
+        params['target_team'] = target_team_wyscout
 
-    if len(same_pos) < 2:
-        return pd.DataFrame()
+    where_sql = ' AND '.join(where)
 
-    # Build feature matrix (only columns available)
-    feat_cols = [c for c in _FEATURE_COLS if c in same_pos.columns]
-    feat_matrix = same_pos[feat_cols].fillna(0).values.astype(float)
+    similarity_sql = text(f"""
+        WITH best_per_player AS (
+            SELECT DISTINCT ON (ps.player_id)
+                ps.player_id,
+                ps.stat_vector,
+                ps.position_group,
+                ps.performance_score,
+                ps.percentile_rank,
+                ps.minutes_total,
+                ps.goals_p90,
+                ps.xg_p90,
+                ps.assists_p90,
+                ps.xa_p90,
+                c.name AS competition_name
+            FROM player_scores ps
+            JOIN players p ON ps.player_id = p.player_id
+            JOIN competitions c ON c.competition_id = ps.competition_id
+            WHERE {where_sql}
+            ORDER BY ps.player_id, ps.minutes_total DESC
+        )
+        SELECT
+            bpp.player_id,
+            p.name,
+            p.position_group,
+            p.primary_position,
+            p.nationality,
+            p.current_team_name,
+            bpp.competition_name,
+            bpp.performance_score,
+            bpp.percentile_rank,
+            bpp.minutes_total,
+            bpp.goals_p90,
+            bpp.xg_p90,
+            bpp.assists_p90,
+            bpp.xa_p90,
+            ROUND(
+                CAST((1 - (bpp.stat_vector <=> CAST(:target_vector AS vector))) AS numeric),
+                3
+            ) AS similarity
+        FROM best_per_player bpp
+        JOIN players p ON p.player_id = bpp.player_id
+        ORDER BY bpp.stat_vector <=> CAST(:target_vector AS vector)
+        LIMIT :n
+    """)
 
-    # Cosine similarity
-    sim_matrix = _cosine_similarity_matrix(feat_matrix)
+    rows = db.execute(similarity_sql, params).fetchall()
 
-    # Find index of target within same_pos
-    target_idx_in_group = same_pos.index.get_loc(same_pos[same_pos["player_id"] == player_id].index[0])
-    sim_scores = sim_matrix[target_idx_in_group]
+    return [
+        {
+            'player_id': r.player_id,
+            'name': r.name,
+            'player_name': r.name,
+            'position_group': r.position_group,
+            'primary_position': r.primary_position,
+            'nationality': r.nationality,
+            'team_name': r.current_team_name,
+            'competition_name': r.competition_name,
+            'performance_score': float(r.performance_score) if r.performance_score else None,
+            'percentile_rank': float(r.percentile_rank) if r.percentile_rank else None,
+            'minutes_total': r.minutes_total,
+            'goals_p90': float(r.goals_p90) if r.goals_p90 else None,
+            'xg_p90': float(r.xg_p90) if r.xg_p90 else None,
+            'assists_p90': float(r.assists_p90) if r.assists_p90 else None,
+            'xa_p90': float(r.xa_p90) if r.xa_p90 else None,
+            'similarity': float(r.similarity) if r.similarity else 0.0,
+        }
+        for r in rows
+    ]
 
-    same_pos = same_pos.copy()
-    same_pos["similarity"] = (sim_scores * 100).round(1)
 
-    # Exclude the player themselves and sort
-    result = (
-        same_pos[same_pos["player_id"] != player_id]
-        .sort_values("similarity", ascending=False)
-        .head(n)
-    )
-
-    if same_league_only:
-        result = result[result["league_name"] == target_row["league_name"]]
-
-    return result[[
-        "player_id", "player_name", "team_name", "league_name",
-        "season_name", "position_group", "similarity",
-        "xg_per90", "xa_per90", "goals_per90", "assists_per90",
-        "aerials_per90", "tackles_per90", "rating",
-    ]].head(n)
+def get_player_vector_info(player_id: int, db) -> Optional[dict]:
+    sql = text("""
+        SELECT ps.player_id, ps.position_group,
+               ps.stat_vector IS NOT NULL AS has_vector,
+               ps.performance_score,
+               c.name AS competition_name
+        FROM player_scores ps
+        JOIN competitions c ON c.competition_id = ps.competition_id
+        WHERE ps.player_id = :player_id AND ps.stat_vector IS NOT NULL
+        ORDER BY ps.minutes_total DESC
+        LIMIT 1
+    """)
+    row = db.execute(sql, {'player_id': player_id}).fetchone()
+    if not row:
+        return None
+    return {
+        'player_id': row.player_id,
+        'role': row.position_group,
+        'has_vector': row.has_vector,
+        'performance_score': float(row.performance_score) if row.performance_score else None,
+        'competition_name': row.competition_name,
+    }

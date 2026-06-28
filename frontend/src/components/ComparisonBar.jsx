@@ -31,12 +31,21 @@ export default function ComparisonBar({ selected, onClear }) {
         </div>
         <div className="w-px h-6 bg-outline-variant/20" />
         {selected.length >= 2 && (
-          <button
-            onClick={() => navigate(`/similar?player_id=${selected[0].player_id}`)}
-            className="bg-primary text-white px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest hover:brightness-110 transition-all"
-          >
-            VIEW SIMILARITY
-          </button>
+          <>
+            <button
+              onClick={() => navigate(`/compare?ids=${selected.map(p => p.player_id).join(',')}`)}
+              className="bg-primary text-white px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest hover:brightness-110 transition-all flex items-center gap-1"
+            >
+              <span className="material-symbols-outlined text-sm">compare_arrows</span>
+              COMPARE ({selected.length})
+            </button>
+            <button
+              onClick={() => navigate(`/similar?player_id=${selected[0].player_id}`)}
+              className="bg-surface-container-highest border border-outline-variant/20 text-on-surface px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest hover:brightness-110 transition-all"
+            >
+              VIEW SIMILARITY
+            </button>
+          </>
         )}
         <button
           onClick={onClear}

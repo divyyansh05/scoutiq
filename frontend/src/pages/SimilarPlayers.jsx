@@ -1,11 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { globalSearch, getPlayer, getSimilarPlayers } from '../api/client'
+import { globalSearch, getPlayer, getSimilarPlayers, getSimilarPlayersGlobal } from '../api/client'
 import api from '../api/client'
 import PositionBadge from '../components/PositionBadge'
 import RadarChart from '../components/RadarChart'
 import { exportToCSV } from '../utils/export'
-import { SEASONS } from './Dashboard'
+import { useSeasons } from '../hooks/useSeasons'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
 
 const RADAR_METRICS = [
   { key: 'xg_per90',        label: 'xG/90' },
@@ -48,7 +50,7 @@ function PlayerSearchBox({ onSelect, placeholder }) {
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder={placeholder}
-          className="bg-transparent py-2.5 text-sm text-on-surface placeholder:text-slate-600 focus:outline-none w-full"
+          className="bg-transparent py-2.5 text-sm text-on-surface placeholder:text-slate-600 focus:outline-none flex-1"
         />
       </div>
       {open && results.length > 0 && (
@@ -74,8 +76,16 @@ function PlayerSearchBox({ onSelect, placeholder }) {
 
 function SimilarPlayerRow({ player, onSelect, selected }) {
   const navigate = useNavigate()
-  const pct = Math.round(player.similarity || 0)
+  // similarity is 0-1 from new API, or 0-100 from old API
+  const rawSim = player.similarity || 0
+  const pct = Math.round(rawSim > 1 ? rawSim : rawSim * 100)
   const barColor = pct >= 85 ? 'bg-emerald-500' : pct >= 70 ? 'bg-blue-500' : 'bg-amber-500'
+
+  const formatMarketValue = (mv) => {
+    if (!mv) return null
+    const millions = mv / 1_000_000
+    return `€${millions.toFixed(1)}M`
+  }
 
   return (
     <div
@@ -85,22 +95,22 @@ function SimilarPlayerRow({ player, onSelect, selected }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <p className="font-headline font-bold text-on-surface group-hover:text-primary transition-colors truncate">
-            {player.player_name}
+            {player.name || player.player_name}
           </p>
           <PositionBadge position={player.position_group} />
         </div>
-        <p className="text-xs text-on-surface-variant truncate">{player.team_name} · {player.league_name}</p>
+        <p className="text-xs text-on-surface-variant truncate">
+          {player.team_name} · {player.competition_name || player.league_name}
+        </p>
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
-        <div className="text-right">
-          <p className="text-xs font-mono font-bold text-on-surface-variant">xG</p>
-          <p className="text-sm font-bold font-mono text-primary">{Number(player.xg_per90 || 0).toFixed(2)}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs font-mono font-bold text-on-surface-variant">xA</p>
-          <p className="text-sm font-bold font-mono text-primary">{Number(player.xa_per90 || 0).toFixed(2)}</p>
-        </div>
+        {player.market_value_eur && (
+          <div className="text-right">
+            <p className="text-xs font-mono font-bold text-on-surface-variant">Value</p>
+            <p className="text-sm font-bold font-mono text-primary">{formatMarketValue(player.market_value_eur)}</p>
+          </div>
+        )}
         <div className="text-right min-w-16">
           <p className="text-xs font-bold text-on-surface-variant mb-1">Match</p>
           <div className="h-1 w-16 bg-surface-container-highest rounded-full overflow-hidden">
@@ -127,35 +137,61 @@ export default function SimilarPlayers() {
   const initId = searchParams.get('player_id')
   const navigate = useNavigate()
 
+  const { seasonOptions, defaultSeason } = useSeasons()
   const [targetId, setTargetId] = useState(initId ? Number(initId) : null)
   const [target, setTarget] = useState(null)
   const [similar, setSimilar] = useState([])
   const [comparison, setComparison] = useState(null)
+  const [comparisonLoading, setComparisonLoading] = useState(false)
   const [adaptability, setAdaptability] = useState(null)
   const [n, setN] = useState(15)
-  const [season, setSeason] = useState('2025-26')
+  const [season, setSeason] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [error, handleError, clearError] = useApiError()
+  const [globalSearchMode, setGlobalSearchMode] = useState(false)
+
+  useEffect(() => {
+    if (defaultSeason && season === null) {
+      setSeason(defaultSeason === 'All Seasons' ? '' : defaultSeason)
+    }
+  }, [defaultSeason])
 
   useEffect(() => {
     if (!targetId) return
     setLoading(true)
-    const seasonParam = season === 'All Seasons' ? undefined : season
+    const seasonParam = (season && season !== 'All Seasons') ? season : undefined
+
+    const similarFn = globalSearchMode
+      ? getSimilarPlayersGlobal(targetId, n, 450)
+      : getSimilarPlayers(targetId, { n, season: seasonParam })
+
     Promise.all([
-      getPlayer(targetId, seasonParam ? { season: seasonParam } : {}),
-      getSimilarPlayers(targetId, { n, season: seasonParam }),
+      getPlayer(targetId, {}),
+      similarFn,
     ]).then(([p, s]) => {
       setTarget(p.data)
-      setSimilar(s.data || [])
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [targetId, n, season])
+      setSimilar(Array.isArray(s.data) ? s.data : (s.data?.similar_players || s.data?.players || []))
+    }).catch(handleError).finally(() => setLoading(false))
+  }, [targetId, n, season, globalSearchMode])
 
   useEffect(() => {
     if (!targetId) return
-    const seasonParam = season === 'All Seasons' ? '2025-26' : season
-    api.get(`/api/players/${targetId}/adaptability`, { params: { season: seasonParam } })
+    api.get(`/api/players/${targetId}/adaptability`, { params: {} })
       .then(r => setAdaptability(r.data))
-      .catch(() => setAdaptability(null))
-  }, [targetId, season])
+      .catch(handleError)
+  }, [targetId])
+
+  const selectComparison = useCallback(async (player) => {
+    setComparisonLoading(true)
+    try {
+      const res = await getPlayer(player.player_id, {})
+      setComparison({ ...res.data, similarity: player.similarity })
+    } catch {
+      setComparison(player)
+    } finally {
+      setComparisonLoading(false)
+    }
+  }, [])
 
   // Compute top 3 similarity factors (metrics where target ≈ comparison)
   const similarityFactors = comparison && target ? (() => {
@@ -178,10 +214,14 @@ export default function SimilarPlayers() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       <div className="mb-8">
         <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">Analysis</p>
         <h1 className="text-4xl font-headline font-black text-on-surface">Similar Players</h1>
-        <p className="text-on-surface-variant text-sm mt-1">Cosine similarity engine — position-normalised feature vectors.</p>
+        <p className="text-on-surface-variant text-sm mt-1">
+          pgvector cosine similarity — {globalSearchMode ? 'cross-league' : 'same-league'} search
+          <span className="text-xs text-on-surface-variant/60 ml-2">powered by pgvector</span>
+        </p>
       </div>
 
       {/* Player selector */}
@@ -198,7 +238,7 @@ export default function SimilarPlayers() {
               onChange={e => setSeason(e.target.value)}
               className="bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2.5 border border-outline-variant/20 focus:outline-none"
             >
-              {SEASONS.map(s => <option key={s} value={s}>{s}</option>)}
+              {seasonOptions.map(s => <option key={s.season_id ?? 'all'} value={s.season_name === 'All Seasons' ? '' : s.season_name}>{s.season_name}</option>)}
             </select>
           </div>
           <div>
@@ -210,6 +250,23 @@ export default function SimilarPlayers() {
             >
               {[5, 10, 15, 20, 30].map(v => <option key={v} value={v}>{v} players</option>)}
             </select>
+          </div>
+          <div>
+            <label className="label-xs block mb-1.5">Scope</label>
+            <div className="flex gap-1 bg-surface-container-high rounded-lg p-1 border border-outline-variant/20">
+              <button
+                onClick={() => setGlobalSearchMode(false)}
+                className={`px-3 py-1.5 text-xs rounded transition-colors ${!globalSearchMode ? 'bg-primary text-on-primary font-bold' : 'text-on-surface-variant hover:text-on-surface'}`}
+              >
+                Same League
+              </button>
+              <button
+                onClick={() => setGlobalSearchMode(true)}
+                className={`px-3 py-1.5 text-xs rounded transition-colors ${globalSearchMode ? 'bg-primary text-on-primary font-bold' : 'text-on-surface-variant hover:text-on-surface'}`}
+              >
+                All Leagues
+              </button>
+            </div>
           </div>
           {similar.length > 0 && (
             <div className="mt-5">
@@ -274,7 +331,7 @@ export default function SimilarPlayers() {
                       key={p.player_id}
                       player={p}
                       selected={comparison?.player_id === p.player_id}
-                      onSelect={setComparison}
+                      onSelect={selectComparison}
                     />
                   ))}
                 </div>
@@ -317,7 +374,11 @@ export default function SimilarPlayers() {
             <div className="bg-surface-container rounded-xl p-5">
               <p className="label-xs mb-1">Radar Comparison</p>
               <p className="text-xs text-on-surface-variant mb-4">Click compare icon to overlay a player.</p>
-              {target ? (
+              {comparisonLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <span className="material-symbols-outlined text-2xl text-primary animate-spin">autorenew</span>
+                </div>
+              ) : target ? (
                 <RadarChart
                   metrics={RADAR_METRICS}
                   player={target}
@@ -332,7 +393,7 @@ export default function SimilarPlayers() {
               <div className="bg-surface-container rounded-xl p-4">
                 <div className="flex items-center justify-between mb-3">
                   <p className="label-xs">Comparing</p>
-                  <button onClick={() => setComparison(null)} className="text-on-surface-variant hover:text-on-surface">
+                  <button onClick={() => { setComparison(null) }} className="text-on-surface-variant hover:text-on-surface">
                     <span className="material-symbols-outlined text-base">close</span>
                   </button>
                 </div>

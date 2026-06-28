@@ -4,7 +4,8 @@
 ScoutIQ is a professional football scouting web application.
 Frontend: React 18 + JSX + Tailwind CSS (port 5173, location: frontend/)
 Backend:  FastAPI + Python + SQLAlchemy (port 8000, location: backend/)
-Data:     PostgreSQL at localhost:5434/football_data (READ-ONLY)
+Data:     football-data-platform API at http://localhost:8000 (READ-ONLY)
+          PostgreSQL at localhost:5434/football_platform (accessed via API only)
 Lists:    SQLite at backend/data/lists.db (read/write — scouting lists only)
 
 ## How To Start Development
@@ -21,13 +22,15 @@ cd frontend && npm run dev
 ```
 
 ## Read These Before Every Session
-1. .claude/CLAUDE.md              — project state, current phase, known issues
-2. .claude/rules/backend.md       — FastAPI, SQLAlchemy, SQL rules
-3. .claude/rules/frontend.md      — React, Tailwind, component rules
-4. .claude/rules/data.md          — exact DB schema and column names
-5. .claude/rules/ux.md            — scouting UX conventions and domain vocab
-6. .claude/skills/pipeline-data.md — data availability and SQL patterns
-7. .claude/skills/scouting-domain.md — football analytics concepts
+1. .claude/skills/migration-playbook.md            — ⚡ READ FIRST. Full DB migration guide + execution order
+2. .claude/CLAUDE.md                              — project state, current phase, known issues
+3. .claude/rules/backend.md                       — FastAPI, SQLAlchemy, SQL rules
+4. .claude/rules/frontend.md                      — React, Tailwind, component rules
+5. .claude/rules/data.md                          — exact DB schema and column names
+6. .claude/rules/ux.md                            — scouting UX conventions and domain vocab
+7. .claude/skills/pipeline-data.md                — data availability and SQL patterns
+8. .claude/skills/scouting-domain.md              — football analytics concepts
+9. .claude/skills/football-data-platform-api.md   — ⚡ NEW PRIMARY DATA SOURCE API reference
 
 ## Architecture (never deviate)
 Frontend → Backend API (/api/*) → PostgreSQL (read-only)
@@ -90,7 +93,14 @@ GET  /api/dashboard/coverage            — per-league coverage breakdown
 - Any reference to /api/v1/ prefix: backend does not use this prefix
 
 ## Pipeline Data Context
-Data comes from ~/Projects/football-etl-pipeline.
-632 unique players across 6 league-seasons (PL all 4, La Liga 2022-23 + partial 2023-24).
-Remaining leagues retrying automatically every hour via LaunchAgent.
-Full context: ~/Projects/football-etl-pipeline/.claude/CLAUDE.md
+Data comes from ~/Projects/football-data-platform (primary) via API at http://localhost:8000.
+NEVER query football_data or football_etl_pipeline directly — use the API.
+
+  Players:           5,818  (up from 632 — full 5-season European dataset)
+  Player match rows: 686,761 with match_date, competition, and 331 stats per row
+  Teams:             173
+  Competitions:      6 (Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Champions League)
+  Seasons:           5 (2021 to 2025, inclusive)
+  Player scores:     21,076 position-aware percentile scores
+
+Full API contract: .claude/skills/football-data-platform-api.md

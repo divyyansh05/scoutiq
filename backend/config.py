@@ -126,6 +126,9 @@ SCORE_PCT_METRICS = {
     'duels_won_pct', 'tackles_won_pct', 'sofascore_rating',
 }
 
+# Metrics where a lower value is better — invert normalisation when scoring
+NEGATIVE_METRICS = {"dispossessed", "big_chances_missed"}
+
 # Score band labels (0–100, percentile-based)
 SCORE_LABELS = [
     (90, "Elite"),
@@ -142,3 +145,16 @@ def score_label(score: float) -> str:
         if score >= threshold:
             return label
     return "Developing"
+
+
+def format_nationality(nationality: str, passport_countries: str) -> str:
+    if not passport_countries:
+        return nationality or "—"
+    countries = [c.strip() for c in passport_countries.split(",") if c.strip()]
+    if not countries:
+        return nationality or "—"
+    # Ensure primary representing nationality is first, followed by others
+    if nationality in countries:
+        countries.remove(nationality)
+        countries.insert(0, nationality)
+    return " / ".join(countries)

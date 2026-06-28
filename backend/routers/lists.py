@@ -7,6 +7,9 @@ import os
 router = APIRouter(prefix="/api/lists", tags=["lists"])
 notes_router = APIRouter(prefix="/api/notes", tags=["notes"])
 searches_router = APIRouter(prefix="/api/searches", tags=["searches"])
+recruitment_router = APIRouter(prefix="/api/recruitment", tags=["recruitment"])
+
+VALID_STAGES = {"identified", "scouted", "shortlisted", "approached", "signed", "rejected"}
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "lists.db")
 
@@ -50,6 +53,24 @@ def init_db():
             description TEXT,
             filters_json TEXT,
             created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS recruitment_pipeline (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL,
+            team_name TEXT,
+            league_name TEXT,
+            position_group TEXT,
+            age INTEGER,
+            nationality TEXT,
+            performance_score REAL,
+            market_value_eur REAL,
+            contract_expires TEXT,
+            stage TEXT NOT NULL DEFAULT 'identified',
+            notes TEXT,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(player_id)
         );
     """)
     conn.commit()
@@ -219,6 +240,124 @@ def save_search(body: SearchSave):
 def delete_saved_search(search_id: int):
     conn = get_db()
     conn.execute("DELETE FROM saved_searches WHERE id = ?", (search_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ── Recruitment Pipeline ───────────────────────────────────────────────────────
+
+class RecruitmentAdd(BaseModel):
+    player_id: int
+    player_name: str
+    team_name: Optional[str] = None
+    league_name: Optional[str] = None
+    position_group: Optional[str] = None
+    age: Optional[int] = None
+    nationality: Optional[str] = None
+    performance_score: Optional[float] = None
+    market_value_eur: Optional[float] = None
+    contract_expires: Optional[str] = None
+    stage: Optional[str] = "identified"
+
+
+class RecruitmentStageUpdate(BaseModel):
+    stage: str
+
+
+class RecruitmentNotesUpdate(BaseModel):
+    notes: str
+
+
+@recruitment_router.get("/")
+def get_recruitment_pipeline():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM recruitment_pipeline ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+
+    result = {s: [] for s in ["identified", "scouted", "shortlisted", "approached", "signed", "rejected"]}
+    for row in rows:
+        entry = dict(row)
+        stage = entry.get("stage", "identified")
+        if stage in result:
+            result[stage].append(entry)
+    return result
+
+
+@recruitment_router.post("/")
+def add_to_recruitment(body: RecruitmentAdd):
+    if body.stage and body.stage not in VALID_STAGES:
+        raise HTTPException(status_code=422, detail=f"Invalid stage. Must be one of: {', '.join(VALID_STAGES)}")
+    conn = get_db()
+    existing = conn.execute(
+        "SELECT id FROM recruitment_pipeline WHERE player_id = ?", (body.player_id,)
+    ).fetchone()
+    if existing:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Player already in recruitment pipeline")
+    cur = conn.execute("""
+        INSERT INTO recruitment_pipeline
+            (player_id, player_name, team_name, league_name, position_group, age,
+             nationality, performance_score, market_value_eur, contract_expires, stage)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        body.player_id, body.player_name, body.team_name, body.league_name,
+        body.position_group, body.age, body.nationality, body.performance_score,
+        body.market_value_eur, body.contract_expires, body.stage or "identified"
+    ))
+    row_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM recruitment_pipeline WHERE id = ?", (row_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@recruitment_router.patch("/{entry_id}/stage")
+def move_recruitment_stage(entry_id: int, body: RecruitmentStageUpdate):
+    if body.stage not in VALID_STAGES:
+        raise HTTPException(status_code=422, detail=f"Invalid stage. Must be one of: {', '.join(VALID_STAGES)}")
+    conn = get_db()
+    existing = conn.execute(
+        "SELECT id FROM recruitment_pipeline WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Recruitment entry not found")
+    conn.execute(
+        "UPDATE recruitment_pipeline SET stage = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (body.stage, entry_id)
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM recruitment_pipeline WHERE id = ?", (entry_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@recruitment_router.patch("/{entry_id}/notes")
+def update_recruitment_notes(entry_id: int, body: RecruitmentNotesUpdate):
+    conn = get_db()
+    existing = conn.execute(
+        "SELECT id FROM recruitment_pipeline WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Recruitment entry not found")
+    conn.execute(
+        "UPDATE recruitment_pipeline SET notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (body.notes, entry_id)
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM recruitment_pipeline WHERE id = ?", (entry_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@recruitment_router.delete("/{entry_id}")
+def remove_from_recruitment(entry_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM recruitment_pipeline WHERE id = ?", (entry_id,))
     conn.commit()
     conn.close()
     return {"ok": True}

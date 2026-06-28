@@ -1,55 +1,112 @@
 #!/bin/bash
-# ScoutIQ Startup Script
-# Usage: ./start.sh
+# ScoutIQ — Start both backend and frontend
+# Usage: ./start.sh [start|stop|restart|status]
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKEND_DIR="$SCRIPT_DIR/backend"
-FRONTEND_DIR="$SCRIPT_DIR/frontend"
+BACKEND_PID_FILE=".backend.pid"
+FRONTEND_PID_FILE=".frontend.pid"
+BACKEND_LOG="logs/backend.log"
+FRONTEND_LOG="logs/frontend.log"
 
-echo "🚀 Starting ScoutIQ..."
-echo ""
+mkdir -p logs
 
-# Kill any existing processes
-pkill -f "uvicorn main:app" 2>/dev/null || true
-pkill -f "vite" 2>/dev/null || true
-sleep 1
+start_backend() {
+  if [ -f "$BACKEND_PID_FILE" ] && kill -0 "$(cat $BACKEND_PID_FILE)" 2>/dev/null; then
+    echo "Backend already running (PID $(cat $BACKEND_PID_FILE))"
+    return
+  fi
+  echo "Starting backend..."
+  cd backend
+  source .venv/bin/activate 2>/dev/null || true
+  nohup python -m uvicorn main:app --reload --port 8000 --host 0.0.0.0 \
+    > "../$BACKEND_LOG" 2>&1 &
+  echo $! > "../$BACKEND_PID_FILE"
+  cd ..
+  echo "Backend started (PID $(cat $BACKEND_PID_FILE)) — logs: $BACKEND_LOG"
+}
 
-# Start backend
-echo "⚙️  Starting FastAPI backend on http://localhost:8000..."
-cd "$BACKEND_DIR"
-OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-  uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
-BACKEND_PID=$!
+start_frontend() {
+  if [ -f "$FRONTEND_PID_FILE" ] && kill -0 "$(cat $FRONTEND_PID_FILE)" 2>/dev/null; then
+    echo "Frontend already running (PID $(cat $FRONTEND_PID_FILE))"
+    return
+  fi
+  echo "Starting frontend..."
+  cd frontend
+  nohup npm run dev > "../$FRONTEND_LOG" 2>&1 &
+  echo $! > "../$FRONTEND_PID_FILE"
+  cd ..
+  echo "Frontend started (PID $(cat $FRONTEND_PID_FILE)) — logs: $FRONTEND_LOG"
+}
 
-# Wait for backend to be ready
-sleep 3
-if curl -s "http://localhost:8000/health" > /dev/null; then
-  echo "✅ Backend running (PID: $BACKEND_PID)"
-else
-  echo "❌ Backend failed to start"
-  exit 1
-fi
+stop_backend() {
+  if [ -f "$BACKEND_PID_FILE" ]; then
+    PID=$(cat $BACKEND_PID_FILE)
+    if kill -0 "$PID" 2>/dev/null; then
+      kill "$PID"
+      echo "Backend stopped (PID $PID)"
+    fi
+    rm -f "$BACKEND_PID_FILE"
+  else
+    echo "Backend not running"
+  fi
+}
 
-# Start frontend
-echo "🎨 Starting React frontend on http://localhost:5173..."
-cd "$FRONTEND_DIR"
-npm run dev &
-FRONTEND_PID=$!
+stop_frontend() {
+  if [ -f "$FRONTEND_PID_FILE" ]; then
+    PID=$(cat $FRONTEND_PID_FILE)
+    if kill -0 "$PID" 2>/dev/null; then
+      kill "$PID"
+      echo "Frontend stopped (PID $PID)"
+    fi
+    rm -f "$FRONTEND_PID_FILE"
+  else
+    echo "Frontend not running"
+  fi
+}
 
-sleep 3
-echo ""
-echo "══════════════════════════════════════════"
-echo "  ScoutIQ is running!"
-echo "  Frontend: http://localhost:5173"
-echo "  Backend:  http://localhost:8000"
-echo "  API Docs: http://localhost:8000/docs"
-echo "══════════════════════════════════════════"
-echo ""
-echo "Press Ctrl+C to stop both servers."
-echo ""
+status() {
+  echo "=== ScoutIQ Status ==="
+  if [ -f "$BACKEND_PID_FILE" ] && kill -0 "$(cat $BACKEND_PID_FILE)" 2>/dev/null; then
+    echo "Backend:  RUNNING (PID $(cat $BACKEND_PID_FILE))"
+  else
+    echo "Backend:  STOPPED"
+  fi
+  if [ -f "$FRONTEND_PID_FILE" ] && kill -0 "$(cat $FRONTEND_PID_FILE)" 2>/dev/null; then
+    echo "Frontend: RUNNING (PID $(cat $FRONTEND_PID_FILE))"
+  else
+    echo "Frontend: STOPPED"
+  fi
+}
 
-# Wait for both processes
-trap "pkill -f 'uvicorn main:app'; pkill -f 'vite'; echo 'Stopped.'" EXIT
-wait $BACKEND_PID $FRONTEND_PID
+case "${1:-start}" in
+  start)
+    start_backend
+    start_frontend
+    sleep 2
+    status
+    echo ""
+    echo "ScoutIQ running at http://localhost:5173"
+    echo "API docs at http://localhost:8000/docs"
+    ;;
+  stop)
+    stop_backend
+    stop_frontend
+    ;;
+  restart)
+    stop_backend
+    stop_frontend
+    sleep 1
+    start_backend
+    start_frontend
+    sleep 2
+    status
+    ;;
+  status)
+    status
+    ;;
+  *)
+    echo "Usage: ./start.sh [start|stop|restart|status]"
+    exit 1
+    ;;
+esac

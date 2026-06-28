@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getChelseaFull } from '../api/client'
-import { SEASONS } from './Dashboard'
+import { useSeasons } from '../hooks/useSeasons'
 import PositionBadge from '../components/PositionBadge'
 import ScoreRing from '../components/ScoreRing'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
 
 const POSITIONS = ['All', 'GK', 'DEF', 'MID', 'WNG', 'FWD']
 
@@ -37,20 +39,25 @@ const COLS = [
 
 export default function ChelseaTeam() {
   const navigate = useNavigate()
-  const [season, setSeason] = useState('2025-26')
+  const { seasons, defaultSeason } = useSeasons()
+  const [season, setSeason] = useState(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [sortCol, setSortCol] = useState('minutes')
   const [sortAsc, setSortAsc] = useState(false)
   const [posFilter, setPosFilter] = useState('All')
-
-  const seasonOptions = SEASONS.filter(s => s !== 'All Seasons')
+  const [error, handleError, clearError] = useApiError()
 
   useEffect(() => {
+    if (defaultSeason && season === null) setSeason(defaultSeason)
+  }, [defaultSeason])
+
+  useEffect(() => {
+    if (season === null) return
     setLoading(true)
     getChelseaFull(season)
       .then(r => setData(r.data))
-      .catch(() => setData(null))
+      .catch(handleError)
       .finally(() => setLoading(false))
   }, [season])
 
@@ -83,6 +90,7 @@ export default function ChelseaTeam() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       {/* Back */}
       <button
         onClick={() => navigate('/')}
@@ -105,15 +113,15 @@ export default function ChelseaTeam() {
 
         {/* Season selector */}
         <div className="flex items-center gap-2 bg-surface-container-high rounded-xl p-1">
-          {seasonOptions.map(s => (
+          {seasons.map(s => (
             <button
-              key={s}
-              onClick={() => setSeason(s)}
+              key={s.season_id}
+              onClick={() => setSeason(s.season_name)}
               className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
-                season === s ? 'bg-primary text-white' : 'text-on-surface-variant hover:text-on-surface'
+                season === s.season_name ? 'bg-primary text-white' : 'text-on-surface-variant hover:text-on-surface'
               }`}
             >
-              {s}
+              {s.season_name}
             </button>
           ))}
         </div>

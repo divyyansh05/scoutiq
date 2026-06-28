@@ -1,10 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getDashboardStats, getTopPerformers, getChelseaFocus } from '../api/client'
+import { getDashboardStats, getTopPerformers } from '../api/client'
 import ScoreRing from '../components/ScoreRing'
 import PositionBadge from '../components/PositionBadge'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
+import { useSeasons } from '../hooks/useSeasons'
+import { formatDateTime } from '../utils/format'
 
-export const SEASONS = ['All Seasons', '2025-26', '2024-25', '2023-24', '2022-23']
+// Removed: SEASONS hardcoded array — all pages now use useSeasons() hook
 
 function StatCard({ icon, label, value, sub, onClick }) {
   return (
@@ -40,7 +44,7 @@ function PerformerRow({ player, rank }) {
       <span className="w-6 text-center text-xs font-bold font-mono text-on-surface-variant">{rank}</span>
       <div className="flex-1 min-w-0">
         <p className="font-headline font-bold text-sm text-on-surface truncate group-hover:text-primary transition-colors">
-          {player.player_name}
+          {player.player_name || player.name}
         </p>
         <p className="text-[11px] text-on-surface-variant truncate">
           {player.team_name} · {player.league_name}
@@ -60,32 +64,29 @@ function PerformerRow({ player, rank }) {
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [performers, setPerformers] = useState([])
-  const [chelsea, setChelsea] = useState(null)
-  const [season, setSeason] = useState('2025-26')
+  const [competition, setCompetition] = useState('')
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
-
-  // Resolve season param: 'All Seasons' → undefined
-  const seasonParam = season === 'All Seasons' ? undefined : season
+  const [error, handleError, clearError] = useApiError()
+  const { seasonOptions } = useSeasons()
 
   useEffect(() => {
     setLoading(true)
     Promise.all([
       getDashboardStats(),
-      getTopPerformers({ season: seasonParam, limit: 10 }),
-      getChelseaFocus({ season: seasonParam || '2025-26' }),
+      getTopPerformers({ competition: competition || undefined, limit: 10 }),
     ])
-      .then(([s, p, c]) => {
+      .then(([s, p]) => {
         setStats(s.data)
         setPerformers(p.data?.performers || [])
-        setChelsea(c.data)
       })
-      .catch(() => {})
+      .catch(handleError)
       .finally(() => setLoading(false))
-  }, [season])
+  }, [competition])
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       {/* Header */}
       <div className="flex items-end justify-between mb-10">
         <div>
@@ -96,22 +97,17 @@ export default function Dashboard() {
           <p className="text-on-surface-variant text-sm mt-2">Real-time player intelligence across all tracked leagues.</p>
         </div>
 
-        {/* Season selector */}
-        <div className="flex items-center gap-2 bg-surface-container rounded-xl p-1">
-          {SEASONS.map(s => (
-            <button
-              key={s}
-              onClick={() => setSeason(s)}
-              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
-                season === s
-                  ? 'bg-primary text-white'
-                  : 'text-on-surface-variant hover:text-on-surface'
-              }`}
-            >
-              {s}
-            </button>
+        {/* Competition filter */}
+        <select
+          value={competition}
+          onChange={e => setCompetition(e.target.value)}
+          className="bg-surface-container border border-outline-variant/20 rounded-xl px-3 py-2 text-sm text-on-surface focus:outline-none focus:border-primary/50"
+        >
+          <option value="">All Competitions</option>
+          {seasonOptions.filter(s => s.name).map(s => (
+            <option key={s.name} value={s.name}>{s.name}</option>
           ))}
-        </div>
+        </select>
       </div>
 
       {/* Stat cards */}
@@ -125,27 +121,33 @@ export default function Dashboard() {
             <StatCard
               icon="group"
               label="Players Tracked"
-              value={(stats?.players_tracked || 0).toLocaleString()}
-              sub="Across all leagues"
+              value={(stats?.total_players || 0).toLocaleString()}
+              sub="Across all competitions"
               onClick={() => navigate('/players')}
             />
             <StatCard
               icon="analytics"
-              label="With Deep Stats"
-              value={(stats?.with_deep_stats || 0).toLocaleString()}
-              sub="Full analytics available"
-              onClick={() => navigate('/players?has_deep_stats=true')}
+              label="Match Records"
+              value={(stats?.total_records || 0).toLocaleString()}
+              sub={`${(stats?.total_scores || 0).toLocaleString()} performance scores`}
+              onClick={() => navigate('/rankings')}
             />
             <StatCard
               icon="public"
-              label="Leagues Covered"
+              label="Competitions"
               value={stats?.leagues_covered || 0}
-              sub="Top European divisions"
+              sub="Global coverage"
               onClick={() => navigate('/coverage')}
             />
           </>
         )}
       </div>
+
+      {stats?.last_updated && (
+        <p className="text-xs text-on-surface-variant/50 text-center mt-2 mb-6">
+          Data last updated: {formatDateTime(stats.last_updated)}
+        </p>
+      )}
 
       {/* Quick Actions */}
       <div className="grid grid-cols-4 gap-3 mb-10">
@@ -200,70 +202,34 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Chelsea Focus panel */}
-        <div
-          className="bg-surface-container rounded-xl overflow-hidden cursor-pointer hover:bg-surface-bright transition-colors group"
-          onClick={() => navigate('/teams/338')}
-        >
+        {/* Top Competitions panel */}
+        <div className="bg-surface-container rounded-xl overflow-hidden">
           <div className="px-5 py-4 border-b border-outline-variant/10 flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400">Club Focus</p>
-              <h2 className="font-headline font-bold text-base text-on-surface mt-0.5">Chelsea FC</h2>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400">Coverage</p>
+              <h2 className="font-headline font-bold text-base text-on-surface mt-0.5">Top Competitions</h2>
             </div>
-            <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
-              <span className="material-symbols-outlined text-blue-400 text-base" style={{ fontVariationSettings: "'FILL' 1" }}>shield</span>
-            </div>
+            <button
+              onClick={() => navigate('/coverage')}
+              className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center hover:bg-blue-500/20 transition-colors"
+            >
+              <span className="material-symbols-outlined text-blue-400 text-base">public</span>
+            </button>
           </div>
-
-          {loading || !chelsea ? (
-            <div className="p-5 space-y-3">
-              {Array(4).fill(0).map((_, i) => <div key={i} className="h-8 animate-pulse bg-surface-container-high rounded-lg" />)}
-            </div>
-          ) : (
-            <div className="p-5">
-              {/* Season + squad stats */}
-              <div className="grid grid-cols-3 gap-3 mb-5">
-                {[
-                  { label: 'Squad', value: chelsea.squad_size || '—' },
-                  { label: 'Avg Age', value: chelsea.avg_age ? chelsea.avg_age.toFixed(1) : '—' },
-                  { label: 'Avg Score', value: chelsea.avg_score ? Math.round(chelsea.avg_score) : '—' },
-                ].map(({ label, value }) => (
-                  <div key={label} className="bg-surface-container-high rounded-xl p-3 text-center">
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">{label}</p>
-                    <p className="text-xl font-headline font-black text-primary">{value}</p>
-                  </div>
-                ))}
+          <div className="p-4 space-y-2">
+            {(stats?.competition_breakdown || stats?.league_breakdown || []).slice(0, 8).map(comp => (
+              <div key={comp.competition_name || comp.league_name}
+                className="flex items-center justify-between text-sm py-1.5 border-b border-outline-variant/5 last:border-0"
+              >
+                <span className="text-on-surface-variant text-xs truncate max-w-[65%]">
+                  {comp.competition_name || comp.league_name}
+                </span>
+                <span className="font-mono font-bold text-primary text-xs shrink-0">
+                  {(comp.players || 0).toLocaleString()} players
+                </span>
               </div>
-
-              {/* Top 3 standouts */}
-              {chelsea.top3?.length > 0 && (
-                <div>
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Top Standouts</p>
-                  <div className="space-y-1">
-                    {chelsea.top3.map(player => (
-                      <div
-                        key={player.player_id}
-                        onClick={e => { e.stopPropagation(); navigate(`/players/${player.player_id}`) }}
-                        className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-surface-bright transition-colors cursor-pointer"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-on-surface truncate">{player.player_name}</p>
-                          <p className="text-[10px] text-on-surface-variant">{player.position_group}</p>
-                        </div>
-                        <span className="text-sm font-bold font-mono text-primary shrink-0">
-                          {Math.round(player.score)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400/60 mt-4 flex items-center gap-1">
-                View Full Squad <span className="material-symbols-outlined text-xs">arrow_forward</span>
-              </p>
-            </div>
-          )}
+            ))}
+          </div>
         </div>
       </div>
     </div>

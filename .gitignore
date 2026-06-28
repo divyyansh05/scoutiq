@@ -22,4 +22,8 @@ design/
 # System
 .DS_Store
 .claude/
-.claude/
+
+# Start script PID files and logs
+.backend.pid
+.frontend.pid
+logs/

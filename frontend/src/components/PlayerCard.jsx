@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import PositionBadge from './PositionBadge'
+import { formatMarketValue } from '../utils/format'
 
 function Initials({ name }) {
   const parts = (name || 'UN').split(' ')
@@ -17,7 +18,8 @@ export default function PlayerCard({ player, selected, onToggleSelect }) {
   const navigate = useNavigate()
   const {
     player_id, player_name, position_group, team_name, league_name,
-    season_name, score, xg_per90, xa_per90, aerials_per90, rating
+    season_name, score, xg_per90, xa_per90, aerials_per90, rating,
+    market_value_eur, scoutiq_value_est, is_injured
   } = player
 
   return (
@@ -47,6 +49,11 @@ export default function PlayerCard({ player, selected, onToggleSelect }) {
           <div className="flex items-center gap-2 mb-0.5 flex-wrap">
             <h3 className="font-headline font-bold text-on-surface text-base truncate">{player_name}</h3>
             <PositionBadge position={position_group} />
+            {is_injured && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-900/50 text-red-400 border border-red-500/50">
+                INJURED
+              </span>
+            )}
           </div>
           <p className="text-xs text-on-surface-variant truncate">{team_name} · {league_name}</p>
           {season_name && (
@@ -70,7 +77,7 @@ export default function PlayerCard({ player, selected, onToggleSelect }) {
           { label: 'XG/90', value: xg_per90 != null ? Number(xg_per90).toFixed(2) : '—' },
           { label: 'XA/90', value: xa_per90 != null ? Number(xa_per90).toFixed(2) : '—' },
           { label: 'AERIALS', value: aerials_per90 != null ? Number(aerials_per90).toFixed(1) : '—' },
-          { label: 'RATING', value: rating != null ? Number(rating).toFixed(2) : '—' },
+          { label: 'RATING', value: rating != null ? Number(rating).toFixed(1) : '—' },
         ].map((stat, i) => (
           <div key={i} className={`text-center ${i > 0 ? 'border-l border-outline-variant/10' : ''}`}>
             <p className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">{stat.label}</p>
@@ -78,6 +85,20 @@ export default function PlayerCard({ player, selected, onToggleSelect }) {
           </div>
         ))}
       </div>
+      {/* Market value or estimated value */}
+      {(market_value_eur || scoutiq_value_est) && (
+        <div className="mt-2 text-right">
+          {market_value_eur ? (
+            <span className="text-xs text-green-400 font-medium">
+              {formatMarketValue(market_value_eur)}
+            </span>
+          ) : scoutiq_value_est ? (
+            <span className="text-xs text-blue-400">
+              ~{formatMarketValue(scoutiq_value_est)} est.
+            </span>
+          ) : null}
+        </div>
+      )}
     </div>
   )
 }

@@ -1,167 +1,143 @@
 """
-Scout Score — composite efficiency metric (0–100, percentile-based).
-
-Score = player's percentile rank within their position group.
-Score 73 → better than 73% of players at that position.
-Labels: Elite (90+) | Top Tier (75+) | Above Avg (60+) |
-        Average (40+) | Below Avg (25+) | Developing (<25)
+performance_score.py — Read pre-computed scores from player_scores table.
+Replaces the old Python computation against player_season_stats.
 """
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 from typing import Optional
 
 from database.connection import run_query
-from config import POSITION_MAP, MIN_MINUTES, PERFORMANCE_WEIGHTS, SCORE_PCT_METRICS, score_label
+from config import score_label, format_nationality
 
 
-_FETCH_SQL = """
-    SELECT
-        p.player_id,
-        p.player_name,
-        t.team_name,
-        l.league_name,
-        s.season_name,
-        p.position,
-        pss.minutes,
-        pss.goals,
-        pss.assists,
-        pss.xg,
-        pss.xa,
-        COALESCE(pss.npxg, 0)                        AS npxg,
-        pss.shots,
-        COALESCE(pss.shots_inside_box, 0)             AS shots_inside_box,
-        pss.key_passes,
-        COALESCE(pss.dribbles_completed, 0)           AS successful_dribbles,
-        pss.aerials_won                               AS aerial_duels_won,
-        COALESCE(pss.aerial_win_pct, 0)               AS aerial_win_pct,
-        pss.tackles_won,
-        COALESCE(pss.tackles_won_pct, 0)              AS tackles_won_pct,
-        COALESCE(pss.tackles, 0)                      AS tackles,
-        pss.interceptions,
-        COALESCE(pss.clearances, 0)                   AS clearances,
-        pss.recoveries,
-        COALESCE(pss.duels_won, 0)                    AS duels_won,
-        COALESCE(pss.duels_won_pct, 0)                AS duels_won_pct,
-        COALESCE(pss.dispossessed, 0)                 AS dispossessed,
-        COALESCE(pss.big_chances_created, 0)          AS big_chances_created,
-        COALESCE(pss.big_chances_missed, 0)           AS big_chances_missed,
-        pss.accurate_passes_pct,
-        COALESCE(pss.accurate_final_third, 0)         AS accurate_final_third,
-        COALESCE(pss.possession_won_att_third, 0)     AS possession_won_att_third,
-        COALESCE(pss.touches, 0)                      AS touches,
-        pss.sofascore_rating,
-        COALESCE(pss.shots_blocked, 0)                AS saves
-    FROM player_season_stats pss
-    JOIN players  p ON pss.player_id  = p.player_id
-    JOIN teams    t ON pss.team_id    = t.team_id
-    JOIN leagues  l ON pss.league_id  = l.league_id
-    JOIN seasons  s ON pss.season_id  = s.season_id
-    WHERE pss.minutes >= :min_minutes
-    {extra_where}
-    ORDER BY pss.sofascore_rating DESC NULLS LAST
-"""
-
-
-def _normalize_position(pos: str) -> str:
-    if not pos:
-        return "MID"
-    return POSITION_MAP.get(pos.strip(), "MID")
+def get_season_dates(season: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not season or season == "All Seasons":
+        return None, None
+    parts = season.strip().split('-')
+    if len(parts) == 2:
+        try:
+            start_year = int(parts[0])
+            end_year = 2000 + int(parts[1]) if len(parts[1]) == 2 else int(parts[1])
+            return f"{start_year}-07-01", f"{end_year}-06-30"
+        except ValueError:
+            pass
+    return None, None
 
 
 def calculate_performance_scores(
     season: Optional[str] = None,
     league: Optional[str] = None,
     position_group: Optional[str] = None,
-    min_minutes: int = MIN_MINUTES,
+    min_minutes: int = 450,
+    competition: Optional[str] = None,
 ) -> pd.DataFrame:
-    extra_parts = []
-    params: dict = {"min_minutes": min_minutes}
+    """Read pre-computed scores from player_scores, keyed by competition."""
+    comp_filter = competition or league
+    start_date, end_date = get_season_dates(season)
 
-    if season:
-        extra_parts.append("AND s.season_name = :season")
-        params["season"] = season
-    if league:
-        extra_parts.append("AND l.league_name = :league")
-        params["league"] = league
+    where = []
+    params: dict = {}
 
-    sql = _FETCH_SQL.format(extra_where=" ".join(extra_parts))
+    if comp_filter:
+        where.append("c.name = :competition")
+        params["competition"] = comp_filter
+
+    if position_group and position_group.upper() in ("GK", "DEF", "MID", "FWD"):
+        where.append("ps.position_group = :position_group")
+        params["position_group"] = position_group.upper()
+
+    if start_date and end_date:
+        # Season filter active - we aggregate minutes/matches from player_match_stats for that season
+        params["start_date"] = start_date
+        params["end_date"] = end_date
+        params["min_minutes"] = min_minutes
+        where_sql = " AND ".join(where) if where else "1=1"
+
+        sql = f"""
+            WITH player_stats AS (
+                SELECT
+                    pms.player_id,
+                    pms.competition_name,
+                    SUM(pms.minutes_played) AS minutes_played,
+                    COUNT(DISTINCT pms.id) AS matches_played
+                FROM player_match_stats pms
+                WHERE pms.match_date >= :start_date AND pms.match_date <= :end_date
+                GROUP BY pms.player_id, pms.competition_name
+            )
+            SELECT DISTINCT ON (ps.player_id)
+                p.player_id,
+                p.name                   AS player_name,
+                p.position_group,
+                p.nationality,
+                p.passport_countries,
+                p.current_team_name      AS team_name,
+                c.name                   AS competition_name,
+                ps.performance_score     AS score,
+                ps.percentile_rank       AS percentile,
+                stats.minutes_played     AS minutes,
+                ps.goals_p90,
+                ps.xg_p90,
+                ps.assists_p90,
+                ps.xa_p90,
+                stats.matches_played     AS matches
+            FROM player_scores ps
+            JOIN players p ON p.player_id = ps.player_id
+            JOIN competitions c ON c.competition_id = ps.competition_id
+            JOIN player_stats stats ON stats.player_id = ps.player_id AND stats.competition_name = c.name
+            WHERE {where_sql} AND stats.minutes_played >= :min_minutes
+            ORDER BY ps.player_id, ps.performance_score DESC NULLS LAST
+        """
+    else:
+        # Standard fast path without season date filtering
+        where.append("ps.minutes_total >= :min_minutes")
+        params["min_minutes"] = min_minutes
+        where_sql = " AND ".join(where)
+
+        sql = f"""
+            SELECT DISTINCT ON (ps.player_id)
+                p.player_id,
+                p.name                   AS player_name,
+                p.position_group,
+                p.nationality,
+                p.passport_countries,
+                p.current_team_name      AS team_name,
+                c.name                   AS competition_name,
+                ps.performance_score     AS score,
+                ps.percentile_rank       AS percentile,
+                ps.minutes_total         AS minutes,
+                ps.goals_p90,
+                ps.xg_p90,
+                ps.assists_p90,
+                ps.xa_p90,
+                ps.matches_total         AS matches
+            FROM player_scores ps
+            JOIN players p ON p.player_id = ps.player_id
+            JOIN competitions c ON c.competition_id = ps.competition_id
+            WHERE {where_sql}
+            ORDER BY ps.player_id, ps.performance_score DESC NULLS LAST
+        """
+
     df = run_query(sql, params)
-
     if df.empty:
         return pd.DataFrame()
 
-    # Coerce numerics
-    for col in df.columns:
-        if col not in ("player_id", "player_name", "team_name", "league_name", "season_name", "position"):
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    df["score"] = pd.to_numeric(df["score"], errors="coerce")
+    df["percentile"] = pd.to_numeric(df["percentile"], errors="coerce")
+    df["score_label"] = df["score"].apply(
+        lambda s: score_label(float(s)) if pd.notna(s) else "—"
+    )
+    df["nationality"] = df.apply(
+        lambda r: format_nationality(r["nationality"], r.get("passport_countries", "")),
+        axis=1
+    )
+    # Backward-compat aliases
+    df["league_name"] = df["competition_name"]
+    df["season_name"] = df["competition_name"]
+    df["xg"] = df.get("xg_p90", 0)
+    df["xa"] = df.get("xa_p90", 0)
+    df["goals"] = df.get("goals_p90", 0)
+    df["assists"] = df.get("assists_p90", 0)
 
-    df["position_group"] = df["position"].apply(_normalize_position)
-
-    if position_group and position_group.upper() in ["GK", "DEF", "MID", "WNG", "FWD"]:
-        df = df[df["position_group"] == position_group.upper()].copy()
-        if df.empty:
-            return pd.DataFrame()
-
-    results = []
-    for pos_grp, pos_df in df.groupby("position_group"):
-        weights = PERFORMANCE_WEIGHTS.get(pos_grp, PERFORMANCE_WEIGHTS["MID"])
-        pos_df = pos_df.copy()
-
-        if len(pos_df) < 3:
-            pos_df["raw_score"] = 50.0
-            pos_df["score"] = 50.0
-            pos_df["percentile"] = 50
-            results.append(pos_df)
-            continue
-
-        pos_df["min90"] = (pos_df["minutes"] / 90).replace(0, np.nan)
-
-        weighted_sum = pd.Series(0.0, index=pos_df.index)
-
-        for metric, weight in weights.items():
-            if metric not in pos_df.columns:
-                continue
-            if metric in SCORE_PCT_METRICS:
-                values = pos_df[metric].fillna(0)
-            else:
-                values = (pos_df[metric].fillna(0) / pos_df["min90"]).fillna(0)
-
-            vmin, vmax = values.min(), values.max()
-            if vmax > vmin:
-                norm = (values - vmin) / (vmax - vmin)
-            else:
-                norm = pd.Series(0.5, index=values.index)
-
-            if weight < 0:
-                weighted_sum += abs(weight) * (1 - norm)
-            else:
-                weighted_sum += weight * norm
-
-        pos_df["raw_score"] = weighted_sum
-
-        # Percentile rank within position group.
-        # Score = fraction of peers with a strictly lower weighted sum, scaled to 0–98.
-        # This prevents the top player from saturating at 100 so distributions look healthy.
-        n = len(pos_df)
-        ranks = pos_df["raw_score"].rank(method="average", ascending=True)
-        pos_df["score"] = ((ranks - 1) / n * 98).round(1)
-        pos_df["percentile"] = (pos_df["score"] / 98 * 100).round(0).astype(int).clip(0, 99)
-
-        results.append(pos_df)
-
-    if not results:
-        return pd.DataFrame()
-
-    final = pd.concat(results, ignore_index=True)
-    final["score_label"] = final["score"].apply(score_label)
-
-    keep = [
-        "player_id", "player_name", "team_name", "league_name",
-        "season_name", "position_group", "minutes",
-        "xg", "xa", "goals", "assists",
-        "score", "percentile", "score_label",
-    ]
-    return final[keep].sort_values("score", ascending=False)
+    return df.sort_values("score", ascending=False)

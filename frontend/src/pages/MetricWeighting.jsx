@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getWeightedRanking } from '../api/client'
 import PositionBadge from '../components/PositionBadge'
 import { exportToCSV } from '../utils/export'
-import { SEASONS } from './Dashboard'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
+import { useSeasons } from '../hooks/useSeasons'
+import { useLeagues } from '../hooks/useLeagues'
 
 const METRIC_GROUPS = {
   ATTACKING: [
@@ -11,10 +14,10 @@ const METRIC_GROUPS = {
     { key: 'goals', label: 'Goals' }, { key: 'assists', label: 'Assists' },
     { key: 'big_chances_created', label: 'Big Chances Created' },
     { key: 'shots_inside_box', label: 'Shots Inside Box' },
-    { key: 'dribbles_completed', label: 'Successful Dribbles' },
+    { key: 'successful_dribbles', label: 'Successful Dribbles' },
   ],
   DEFENSIVE: [
-    { key: 'aerials_won', label: 'Aerial Duels Won' }, { key: 'aerial_win_pct', label: 'Aerial Win%' },
+    { key: 'aerial_duels_won', label: 'Aerial Duels Won' }, { key: 'aerial_win_pct', label: 'Aerial Win%' },
     { key: 'tackles_won', label: 'Tackles Won' }, { key: 'tackles_won_pct', label: 'Tackles Won%' },
     { key: 'interceptions', label: 'Interceptions' }, { key: 'clearances', label: 'Clearances' },
     { key: 'recoveries', label: 'Recoveries' }, { key: 'dispossessed', label: 'Dispossessed' },
@@ -31,7 +34,6 @@ const METRIC_GROUPS = {
 }
 
 const POSITIONS = ['', 'GK', 'DEF', 'MID', 'WNG', 'FWD']
-const LEAGUES = ['', 'Premier League', 'La Liga', 'Serie A', 'Bundesliga', 'Ligue 1']
 
 function stars(score) {
   const n = score >= 90 ? 5 : score >= 75 ? 4 : score >= 60 ? 3 : score >= 45 ? 2 : 1
@@ -40,14 +42,24 @@ function stars(score) {
 
 export default function MetricWeighting() {
   const navigate = useNavigate()
+  const { seasonOptions, defaultSeason } = useSeasons()
+  const { leagueOptions } = useLeagues()
   const [weights, setWeights] = useState({})
-  const [season, setSeason] = useState('2025-26')
+  const [season, setSeason] = useState('')
   const [position, setPosition] = useState('')
   const [league, setLeague] = useState('')
   const [minMinutes, setMinMinutes] = useState(450)
+
+  // Set default season once loaded
+  useEffect(() => {
+    if (defaultSeason && !season) {
+      setSeason(defaultSeason)
+    }
+  }, [defaultSeason])
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
   const [calculated, setCalculated] = useState(false)
+  const [error, handleError, clearError] = useApiError()
 
   const setWeight = (key, val) => setWeights(w => ({ ...w, [key]: Number(val) }))
 
@@ -59,15 +71,15 @@ export default function MetricWeighting() {
     try {
       const res = await getWeightedRanking({
         weights: activeWeights,
-        season,
+        competition: league || season || null,
         position: position || null,
-        league: league || null,
         min_minutes: minMinutes,
         limit: 50,
       })
       setResults(res.data.players || [])
       setCalculated(true)
-    } catch {
+    } catch (e) {
+      handleError(e)
       setResults([])
     } finally {
       setLoading(false)
@@ -84,6 +96,7 @@ export default function MetricWeighting() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       <div className="mb-8">
         <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">Intelligence</p>
         <h1 className="text-4xl font-headline font-black text-on-surface">Metric Weighting</h1>
@@ -100,7 +113,9 @@ export default function MetricWeighting() {
               <label className="label-xs block mb-1.5">Season</label>
               <select value={season} onChange={e => setSeason(e.target.value)}
                 className="w-full bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2 border border-outline-variant/20 focus:outline-none">
-                {SEASONS.filter(s => s !== 'All Seasons').map(s => <option key={s} value={s}>{s}</option>)}
+                {seasonOptions.filter(s => s.season_name !== 'All Seasons').map(s => (
+                  <option key={s.season_id ?? 'all'} value={s.season_name}>{s.season_name}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -114,7 +129,11 @@ export default function MetricWeighting() {
               <label className="label-xs block mb-1.5">League</label>
               <select value={league} onChange={e => setLeague(e.target.value)}
                 className="w-full bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2 border border-outline-variant/20 focus:outline-none">
-                {LEAGUES.map(l => <option key={l} value={l}>{l || 'All Leagues'}</option>)}
+                {leagueOptions.map(l => (
+                  <option key={l.league_id ?? 'all'} value={l.league_name === 'All Leagues' ? '' : l.league_name}>
+                    {l.league_name}
+                  </option>
+                ))}
               </select>
             </div>
             <div>

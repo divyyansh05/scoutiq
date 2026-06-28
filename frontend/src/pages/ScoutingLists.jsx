@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getLists, createList, deleteList, getListPlayers, removeFromList } from '../api/client'
 import PositionBadge from '../components/PositionBadge'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
 
 function CreateListModal({ onClose, onCreate }) {
   const [name, setName] = useState('')
@@ -103,12 +105,14 @@ export default function ScoutingLists() {
   const [showCreate, setShowCreate] = useState(false)
   const [loading, setLoading] = useState(true)
   const [playersLoading, setPlayersLoading] = useState(false)
+  const [error, handleError, clearError] = useApiError()
 
   const fetchLists = async () => {
     try {
       const res = await getLists()
       setLists(res.data || [])
-    } catch {
+    } catch (e) {
+      handleError(e)
       setLists([])
     }
   }
@@ -122,7 +126,7 @@ export default function ScoutingLists() {
     setPlayersLoading(true)
     getListPlayers(selectedList.id)
       .then(r => setPlayers(r.data || []))
-      .catch(() => setPlayers([]))
+      .catch(handleError)
       .finally(() => setPlayersLoading(false))
   }, [selectedList])
 
@@ -146,6 +150,7 @@ export default function ScoutingLists() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       <div className="flex items-end justify-between mb-8">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">Workspace</p>

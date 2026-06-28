@@ -1,8 +1,6 @@
 """
-Team style clustering using K-Means on aggregate team statistics.
-
-Clusters are labelled with a style fingerprint based on which features
-dominate each centroid.
+Team style clustering using K-Means on team_match_stats aggregates.
+Rewritten for football_platform schema.
 """
 
 from __future__ import annotations
@@ -12,7 +10,6 @@ import pandas as pd
 from typing import Optional
 
 from database.connection import run_query
-from config import MIN_MINUTES
 
 try:
     from sklearn.preprocessing import StandardScaler
@@ -23,75 +20,72 @@ except ImportError:
 
 _N_CLUSTERS = 5
 
-_STYLE_NAMES = {
-    0: "High Press",
-    1: "Possession",
-    2: "Counter Attack",
-    3: "Direct Play",
-    4: "Defensive Block",
-}
-
 _FETCH_SQL = """
     SELECT
         t.team_id,
-        t.team_name,
-        l.league_name,
-        AVG(pss.xg)                  AS avg_xg,
-        AVG(pss.xa)                  AS avg_xa,
-        AVG(pss.shots)               AS avg_shots,
-        AVG(pss.key_passes)          AS avg_key_passes,
-        AVG(pss.dribbles_completed)  AS avg_dribbles,
-        AVG(pss.aerials_won)         AS avg_aerials,
-        AVG(pss.tackles_won)         AS avg_tackles,
-        AVG(pss.interceptions)       AS avg_interceptions,
-        AVG(pss.recoveries)          AS avg_recoveries,
-        AVG(pss.accurate_passes_pct) AS avg_pass_accuracy,
-        AVG(pss.sofascore_rating)    AS avg_rating,
-        COUNT(DISTINCT pss.player_id) AS squad_size
-    FROM player_season_stats pss
-    JOIN teams   t ON pss.team_id   = t.team_id
-    JOIN leagues l ON pss.league_id = l.league_id
-    JOIN seasons s ON pss.season_id = s.season_id
-    WHERE pss.minutes >= :min_minutes
+        t.name                             AS team_name,
+        tms.competition_name               AS league_name,
+        COUNT(*)                           AS matches,
+        ROUND(AVG(tms.xg)::numeric, 3)     AS avg_xg,
+        ROUND(AVG(tms.shots)::numeric, 1)  AS avg_shots,
+        ROUND(AVG(tms.crosses)::numeric, 1) AS avg_crosses,
+        ROUND(AVG(tms.touches_in_box)::numeric, 1) AS avg_touches_in_box,
+        ROUND(AVG(tms.deep_passes)::numeric, 1)    AS avg_deep_passes,
+        ROUND(AVG(CASE WHEN tms.result='W' THEN 1 ELSE 0 END)::numeric * 100, 1) AS win_rate
+    FROM team_match_stats tms
+    JOIN teams t ON t.team_id = tms.team_id
     {extra_where}
-    GROUP BY t.team_id, t.team_name, l.league_name
-    HAVING COUNT(DISTINCT pss.player_id) >= 5
+    GROUP BY t.team_id, t.name, tms.competition_name
+    HAVING COUNT(*) >= 5
 """
 
 _FEATURE_COLS = [
-    "avg_xg", "avg_xa", "avg_shots", "avg_key_passes", "avg_dribbles",
-    "avg_aerials", "avg_tackles", "avg_interceptions", "avg_recoveries",
-    "avg_pass_accuracy",
+    "avg_xg", "avg_shots", "avg_crosses",
+    "avg_touches_in_box", "avg_deep_passes", "win_rate",
 ]
 
 
 def _label_cluster(centroid: np.ndarray, feature_names: list[str]) -> str:
-    """Assign a human-readable style based on which features are highest."""
-    top_idx = np.argsort(centroid)[::-1][:3]
-    top = [feature_names[i] for i in top_idx]
+    feat = dict(zip(feature_names, centroid))
+    xg = feat.get('avg_xg', 0)
+    shots = feat.get('avg_shots', 0)
+    crosses = feat.get('avg_crosses', 0)
+    touches = feat.get('avg_touches_in_box', 0)
+    deep = feat.get('avg_deep_passes', 0)
 
-    if "avg_tackles" in top and "avg_interceptions" in top:
-        return "High Press"
-    if "avg_pass_accuracy" in top and "avg_key_passes" in top:
-        return "Possession"
-    if "avg_recoveries" in top and "avg_shots" in top:
-        return "Counter Attack"
-    if "avg_aerials" in top and "avg_shots" in top:
-        return "Direct Play"
-    return "Defensive Block"
+    if xg > 1.5 and deep > 25:
+        return 'Possession'
+    elif shots > 14 and xg > 1.3:
+        return 'High Press'
+    elif crosses > 10 and touches > 15:
+        return 'Direct Play'
+    elif xg < 1.1 and shots < 11:
+        return 'Defensive Block'
+    elif xg > 1.2 and crosses < 8:
+        return 'Counter Attack'
+    else:
+        scores = {
+            'Possession': deep * 0.4 + xg * 0.4 + touches * 0.2,
+            'High Press': shots * 0.5 + xg * 0.3 + touches * 0.2,
+            'Direct Play': crosses * 0.5 + touches * 0.3 + shots * 0.2,
+            'Defensive Block': (15 - shots) * 0.5 + (1.5 - xg) * 0.5,
+            'Counter Attack': xg * 0.5 + (10 - crosses) * 0.3 + shots * 0.2,
+        }
+        return max(scores, key=scores.get)
 
 
 def get_team_styles(
     season: Optional[str] = None,
     n_clusters: int = _N_CLUSTERS,
-    min_minutes: int = MIN_MINUTES,
+    competition: Optional[str] = None,
 ) -> pd.DataFrame:
     extra_parts = []
-    params: dict = {"min_minutes": min_minutes}
+    params: dict = {}
 
-    if season:
-        extra_parts.append("AND s.season_name = :season")
-        params["season"] = season
+    comp_filter = competition or season
+    if comp_filter:
+        extra_parts.append("WHERE tms.competition_name = :competition")
+        params["competition"] = comp_filter
 
     sql = _FETCH_SQL.format(extra_where=" ".join(extra_parts))
     df = run_query(sql, params)
@@ -99,8 +93,7 @@ def get_team_styles(
     if df.empty:
         return pd.DataFrame()
 
-    # Coerce
-    for col in _FEATURE_COLS + ["avg_rating", "squad_size"]:
+    for col in _FEATURE_COLS + ["matches"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
@@ -110,7 +103,6 @@ def get_team_styles(
         return df
 
     feature_matrix = df[_FEATURE_COLS].values.astype(float)
-
     scaler = StandardScaler()
     scaled = scaler.fit_transform(feature_matrix)
 
@@ -118,7 +110,6 @@ def get_team_styles(
     km = KMeans(n_clusters=k, random_state=42, n_init=10)
     df["cluster"] = km.fit_predict(scaled)
 
-    # Label each cluster
     centroids_original = scaler.inverse_transform(km.cluster_centers_)
     cluster_styles = {
         i: _label_cluster(centroids_original[i], _FEATURE_COLS)
@@ -128,7 +119,6 @@ def get_team_styles(
 
     return df[[
         "team_id", "team_name", "league_name", "cluster", "style",
-        "avg_xg", "avg_xa", "avg_shots", "avg_key_passes",
-        "avg_aerials", "avg_tackles", "avg_pass_accuracy",
-        "avg_rating", "squad_size",
+        "matches", "avg_xg", "avg_shots", "avg_crosses",
+        "avg_touches_in_box", "avg_deep_passes", "win_rate",
     ]]

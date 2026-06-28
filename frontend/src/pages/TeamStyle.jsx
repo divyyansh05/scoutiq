@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { getTeamStyles } from '../api/client'
-import { SEASONS } from './Dashboard'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
+import { useSeasons } from '../hooks/useSeasons'
 
 const STYLE_COLORS = {
   'High Press':     { bg: 'bg-red-500/10',    text: 'text-red-400',     dot: 'bg-red-500' },
@@ -20,12 +23,15 @@ function StatMini({ label, value }) {
   )
 }
 
-function TeamCard({ team }) {
+function TeamCard({ team, onClick }) {
   const style = team.style || 'Unknown'
   const colors = STYLE_COLORS[style] || STYLE_COLORS['Unknown']
 
   return (
-    <div className="bg-surface-container hover:bg-surface-bright transition-all rounded-xl p-4">
+    <div
+      className="bg-surface-container hover:bg-surface-bright transition-all rounded-xl p-4 cursor-pointer"
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="min-w-0">
           <p className="font-headline font-bold text-on-surface text-sm truncate">{team.team_name}</p>
@@ -38,7 +44,13 @@ function TeamCard({ team }) {
       </div>
       <div className="grid grid-cols-4 gap-1 pt-3 border-t border-outline-variant/10">
         <StatMini label="xG" value={team.avg_xg} />
-        <StatMini label="Shots" value={team.avg_shots} />
+        <div className="text-center">
+          <p className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">Shots</p>
+          {team.avg_shots > 0
+            ? <p className="text-xs font-mono font-bold text-primary">{Number(team.avg_shots).toFixed(2)}</p>
+            : <p className="text-xs font-mono text-on-surface-variant/40 italic">no data</p>
+          }
+        </div>
         <StatMini label="Tackles" value={team.avg_tackles} />
         <StatMini label="Pass%" value={team.avg_pass_accuracy} />
       </div>
@@ -47,21 +59,33 @@ function TeamCard({ team }) {
 }
 
 export default function TeamStyle() {
+  const navigate = useNavigate()
+  const { seasonOptions, defaultSeason } = useSeasons()
   const [teams, setTeams] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeStyle, setActiveStyle] = useState('All')
-  const [season, setSeason] = useState('2025-26')
+  const [season, setSeason] = useState(null)
+  const [error, handleError, clearError] = useApiError()
+
+  // Set default season once loaded
+  useEffect(() => {
+    if (defaultSeason && season === null) {
+      setSeason(defaultSeason)
+    }
+  }, [defaultSeason])
 
   useEffect(() => {
+    if (season === null) return
     setLoading(true)
     const seasonParam = season === 'All Seasons' ? undefined : season
     getTeamStyles({ season: seasonParam })
       .then(r => setTeams(r.data || []))
-      .catch(() => setTeams([]))
+      .catch(handleError)
       .finally(() => setLoading(false))
   }, [season])
 
-  const styles = ['All', ...Object.keys(STYLE_COLORS).filter(s => s !== 'Unknown')]
+  // Generate filter buttons dynamically from actual data
+  const availableStyles = ['All', ...new Set(teams.map(t => t.style).filter(Boolean))]
   const filtered = activeStyle === 'All' ? teams : teams.filter(t => t.style === activeStyle)
 
   // Group counts
@@ -72,6 +96,7 @@ export default function TeamStyle() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       <div className="flex items-end justify-between mb-8">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">Analytics</p>
@@ -81,15 +106,15 @@ export default function TeamStyle() {
           </p>
         </div>
         <div className="flex items-center gap-2 bg-surface-container rounded-xl p-1">
-          {SEASONS.map(s => (
+          {seasonOptions.map(s => (
             <button
-              key={s}
-              onClick={() => setSeason(s)}
+              key={s.season_id ?? 'all'}
+              onClick={() => setSeason(s.season_name)}
               className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
-                season === s ? 'bg-primary text-white' : 'text-on-surface-variant hover:text-on-surface'
+                season === s.season_name ? 'bg-primary text-white' : 'text-on-surface-variant hover:text-on-surface'
               }`}
             >
-              {s}
+              {s.season_name}
             </button>
           ))}
         </div>
@@ -112,8 +137,8 @@ export default function TeamStyle() {
 
       {/* Style filter tabs */}
       <div className="flex items-center gap-2 mb-6 flex-wrap">
-        {styles.map(s => {
-          const colors = STYLE_COLORS[s] || {}
+        {availableStyles.map(s => {
+          const colors = STYLE_COLORS[s] || STYLE_COLORS['Unknown']
           const isActive = activeStyle === s
           return (
             <button
@@ -147,7 +172,7 @@ export default function TeamStyle() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map(t => <TeamCard key={t.team_id} team={t} />)}
+          {filtered.map(t => <TeamCard key={t.team_id} team={t} onClick={() => navigate(`/teams/${t.team_id}`)} />)}
         </div>
       )}
     </div>

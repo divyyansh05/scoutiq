@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { getTalents } from '../api/client'
 import PositionBadge from '../components/PositionBadge'
 import ScoreRing from '../components/ScoreRing'
-import { SEASONS } from './Dashboard'
+import useApiError from '../hooks/useApiError'
+import ErrorBanner from '../components/ErrorBanner'
+import { useSeasons } from '../hooks/useSeasons'
 
 function TalentCard({ player }) {
   const navigate = useNavigate()
@@ -19,12 +21,12 @@ function TalentCard({ player }) {
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-12 h-12 rounded-xl bg-surface-container-highest flex items-center justify-center shrink-0 border border-outline-variant/20">
             <span className="font-headline font-bold text-primary text-base">
-              {(player.player_name || 'XX').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+              {(player.player_name || player.name || 'XX').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
             </span>
           </div>
           <div className="min-w-0">
             <p className="font-headline font-bold text-on-surface group-hover:text-primary transition-colors truncate">
-              {player.player_name}
+              {player.player_name || player.name}
             </p>
             <p className="text-xs text-on-surface-variant truncate">{player.team_name}</p>
           </div>
@@ -37,15 +39,15 @@ function TalentCard({ player }) {
         <PositionBadge position={player.position_group} />
         <span className="chip bg-amber-500/10 text-amber-400">Age {player.age}</span>
         <span className="chip bg-emerald-500/10 text-emerald-400">{player.score_label}</span>
-        <span className="chip">{player.league_name}</span>
+        <span className="chip">{player.competition_name || player.league_name}</span>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-2 pt-4 border-t border-outline-variant/10">
         {[
-          { label: 'xG/90', value: Number(player.xg_per90 || 0).toFixed(2) },
-          { label: 'xA/90', value: Number(player.xa_per90 || 0).toFixed(2) },
-          { label: 'Rating', value: Number(player.rating || 0).toFixed(2) },
+          { label: 'xG/90', value: Number(player.xg_per90 || player.xg_p90 || 0).toFixed(2) },
+          { label: 'xA/90', value: Number(player.xa_per90 || player.xa_p90 || 0).toFixed(2) },
+          { label: 'Goals/90', value: Number(player.goals_per90 || player.goals_p90 || 0).toFixed(2) },
           { label: 'Pct.', value: `${pct}th` },
         ].map((s, i) => (
           <div key={i} className={`text-center ${i > 0 ? 'border-l border-outline-variant/10' : ''}`}>
@@ -69,23 +71,28 @@ function TalentCard({ player }) {
 }
 
 export default function EmergingTalent() {
+  const { seasonOptions } = useSeasons()
   const [filters, setFilters] = useState({ max_age: 23, min_minutes: 450, top_percentile: 75 })
-  const [season, setSeason] = useState('2025-26')
+  const [competition, setCompetition] = useState('')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
+  const [error, handleError, clearError] = useApiError()
 
   const fetch = useCallback(async () => {
     setLoading(true)
     try {
-      const seasonParam = season === 'All Seasons' ? undefined : season
-      const res = await getTalents({ ...filters, season: seasonParam })
+      const res = await getTalents({
+        ...filters,
+        ...(competition && { competition }),
+      })
       setResults(res.data || [])
-    } catch {
+    } catch (e) {
+      handleError(e)
       setResults([])
     } finally {
       setLoading(false)
     }
-  }, [filters, season])
+  }, [filters, competition])
 
   useEffect(() => { fetch() }, [fetch])
 
@@ -93,6 +100,7 @@ export default function EmergingTalent() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
+      <ErrorBanner error={error} onClose={clearError} />
       <div className="mb-8">
         <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">Scout</p>
         <h1 className="text-4xl font-headline font-black text-on-surface">Emerging Talent</h1>
@@ -104,13 +112,16 @@ export default function EmergingTalent() {
       {/* Controls */}
       <div className="bg-surface-container rounded-xl p-5 mb-6 flex flex-wrap gap-6 items-end">
         <div>
-          <label className="label-xs block mb-1.5">Season</label>
+          <label className="label-xs block mb-1.5">Competition</label>
           <select
-            value={season}
-            onChange={e => setSeason(e.target.value)}
+            value={competition}
+            onChange={e => setCompetition(e.target.value)}
             className="bg-surface-container-high text-on-surface text-sm rounded-lg px-3 py-2 border border-outline-variant/20 focus:outline-none"
           >
-            {SEASONS.map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="">All Competitions</option>
+            {seasonOptions.filter(s => s.name).map(s => (
+              <option key={s.name} value={s.name}>{s.name}</option>
+            ))}
           </select>
         </div>
 
