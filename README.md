@@ -85,9 +85,9 @@ ScoutIQ turns raw match statistics into structured scouting intelligence. Built 
 | Frontend | React 18.2, Vite 5.1, Tailwind CSS 3.4, Recharts 2.12, Axios 1.6 |
 | Backend | FastAPI 0.110, SQLAlchemy 2.0, Uvicorn 0.27, Pydantic v2 |
 | Analytics | scikit-learn 1.4 (K-Means, cosine similarity), pandas 2.2, numpy 1.26 |
-| Primary DB | PostgreSQL 15 via football-etl-pipeline (read-only) |
+| Primary DB | PostgreSQL 15 via football-data-platform (read-only) |
 | Lists DB | SQLite — scouting lists, notes, recruitment pipeline, squad plans, tactical presets |
-| Data source | Wyscout match-level data via football-etl-pipeline ETL |
+| Data source | Wyscout match-level data via football-data-platform ETL |
 
 ---
 
@@ -96,12 +96,16 @@ ScoutIQ turns raw match statistics into structured scouting intelligence. Built 
 ### Prerequisites
 - Python 3.9+
 - Node.js 20+
-- [football-etl-pipeline](https://github.com/divyansh-shrivastava/football-etl-pipeline) running (provides PostgreSQL at port 5434)
+- [football-data-platform](https://github.com/divyyansh05/football-etl-pipeline) running (provides PostgreSQL at port 5434)
 
-### 1. Start the database
+### 1. Clone the backend and start the database
 
 ```bash
-cd ~/Projects/football-etl-pipeline
+# Clone the backend repository into a folder named football-data-platform
+git clone https://github.com/divyyansh05/football-etl-pipeline.git football-data-platform
+
+# Navigate to the folder and start the database
+cd football-data-platform
 docker compose up -d db
 ```
 
@@ -146,7 +150,7 @@ cp backend/.env.example backend/.env
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5434/football_data` | PostgreSQL from football-etl-pipeline |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5434/football_platform` | PostgreSQL from football-data-platform |
 | `CHELSEA_TEAM_ID` | `10` | Team ID for dashboard Chelsea focus |
 | `MIN_MINUTES` | `900` | Minimum minutes for performance score eligibility |
 
@@ -265,10 +269,10 @@ scoutiq/
 ## Data Architecture
 
 ```
-football-etl-pipeline (separate repo — populates the DB weekly)
+football-data-platform (separate repo — populates the DB)
     │
     ▼
-PostgreSQL 15 @ localhost:5434/football_data
+PostgreSQL 15 @ localhost:5434/football_platform
     │
     ├── players              — 5,818 players (name, position_group, DOB, team, nationality)
     ├── player_match_stats   — 686,761 match records (goals, xG, xA, tackles, dribbles, etc.)
@@ -312,7 +316,7 @@ Full recording script: [`docs/scout_iq_presentor.md`](docs/scout_iq_presentor.md
 
 ## Related
 
-- [football-etl-pipeline](https://github.com/divyansh-shrivastava/football-etl-pipeline) — ETL that populates the PostgreSQL database
+- [football-data-platform](https://github.com/divyyansh05/football-etl-pipeline) — Database platform and ETL that populates the PostgreSQL database
 
 ---
 
